@@ -166,3 +166,77 @@ export async function logout(req: AuthRequest, res: Response) {
 
   res.json({ message: "Logged out successfully." });
 }
+
+// GET /api/auth/me
+export async function getMe(req: AuthRequest, res: Response) {
+  const user = await User.findById(req.user!.id);
+  if (!user) throw new AppError("User not found", 404);
+
+  res.json({
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    company: user.company ?? "",
+    phone: user.phone ?? "",
+    jobTitle: user.jobTitle ?? "",
+    username: user.username ?? "",
+    location: user.location ?? "",
+    birthday: user.birthday ?? "",
+    gender: user.gender ?? "",
+    bio: user.bio ?? "",
+    role: user.role,
+    status: user.status,
+  });
+}
+
+// PATCH /api/auth/me
+export async function updateMe(req: AuthRequest, res: Response) {
+  const { name, company, phone, jobTitle, username, location, birthday, gender, bio } = req.body;
+
+  const user = await User.findById(req.user!.id);
+  if (!user) throw new AppError("User not found", 404);
+
+  if (name !== undefined) user.name = name.trim();
+  if (company !== undefined) user.company = company.trim();
+  if (phone !== undefined) user.phone = phone.trim();
+  if (jobTitle !== undefined) user.jobTitle = jobTitle.trim();
+  if (username !== undefined) user.username = username.trim();
+  if (location !== undefined) user.location = location.trim();
+  if (birthday !== undefined) user.birthday = birthday.trim();
+  if (gender !== undefined) user.gender = gender.trim();
+  if (bio !== undefined) user.bio = bio.trim();
+
+  await user.save();
+
+  res.json({
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    company: user.company ?? "",
+    phone: user.phone ?? "",
+    jobTitle: user.jobTitle ?? "",
+    username: user.username ?? "",
+    location: user.location ?? "",
+    birthday: user.birthday ?? "",
+    gender: user.gender ?? "",
+    bio: user.bio ?? "",
+    role: user.role,
+    status: user.status,
+  });
+}
+
+// PATCH /api/auth/me/password
+export async function updatePassword(req: AuthRequest, res: Response) {
+  const { currentPassword, newPassword } = req.body;
+
+  const user = await User.findById(req.user!.id).select("+password");
+  if (!user) throw new AppError("User not found", 404);
+
+  const isMatch = await user.comparePassword(currentPassword);
+  if (!isMatch) throw new AppError("Current password is incorrect", 400);
+
+  user.password = newPassword;
+  await user.save();
+
+  res.json({ message: "Password updated successfully." });
+}

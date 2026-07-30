@@ -10,6 +10,13 @@ export interface IUser extends Document {
   email: string;
   password: string;
   company?: string;
+  phone?: string;
+  jobTitle?: string;
+  username?: string;
+  location?: string;
+  birthday?: string;
+  gender?: string;
+  bio?: string;
   role: UserRole;
   status: UserStatus;
   activationToken?: string;
@@ -33,6 +40,13 @@ const UserSchema = new Schema<IUser>(
       trim: true,
     },
     company: { type: String, trim: true },
+    phone: { type: String, trim: true },
+    jobTitle: { type: String, trim: true },
+    username: { type: String, trim: true },
+    location: { type: String, trim: true },
+    birthday: { type: String, trim: true },
+    gender: { type: String, trim: true },
+    bio: { type: String, trim: true },
     password: { type: String, required: true, minlength: 8, select: false },
     role: {
       type: String,
