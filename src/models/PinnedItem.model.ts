@@ -1,0 +1,37 @@
+import mongoose, { Document, Schema } from "mongoose";
+
+export type PinnedItemType = "narrative" | "table" | "chart";
+
+export interface IPinnedItem extends Document {
+  _id: mongoose.Types.ObjectId;
+  project: mongoose.Types.ObjectId;
+  pinnedBy: mongoose.Types.ObjectId;
+  sourceChat: mongoose.Types.ObjectId;
+  title: string;
+  type: PinnedItemType;
+  sourceQuestion: string;
+  content: string;
+  tableData?: Record<string, unknown>[];
+  chartData?: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const PinnedItemSchema = new Schema<IPinnedItem>(
+  {
+    project: { type: Schema.Types.ObjectId, ref: "Project", required: true },
+    pinnedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    sourceChat: { type: Schema.Types.ObjectId, ref: "Chat", required: true },
+    title: { type: String, required: true, trim: true },
+    type: { type: String, enum: ["narrative", "table", "chart"], required: true },
+    sourceQuestion: { type: String, required: true },
+    content: { type: String, required: true },
+    tableData: { type: [Schema.Types.Mixed] },
+    chartData: { type: Schema.Types.Mixed },
+  },
+  { timestamps: true }
+);
+
+PinnedItemSchema.index({ project: 1 });
+
+export const PinnedItem = mongoose.model<IPinnedItem>("PinnedItem", PinnedItemSchema);

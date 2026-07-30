@@ -1,0 +1,149 @@
+import { Response } from "express";
+import mongoose from "mongoose";
+import { AuthRequest } from "../middleware/auth.middleware";
+import { Project } from "../models/Project.model";
+import { User } from "../models/User.model";
+import { AppError } from "../middleware/errorHandler";
+import { generateSecureToken, activationExpiryDate } from "../services/token.service";
+import { sendActivationEmail } from "../services/email.service";
+
+// GET /api/projects/:projectId/users
+export async function listProjectUsers(req: AuthRequest, res: Response) {
+  const project = await Project.findById(req.params.projectId).populate(
+    "members.user",
+    "name email role status lastActive"
+  );
+  if (!project) throw new AppError("Project not found", 404);
+
+  const members = project.members.map((m) => {
+    const u = m.user as unknown as {
+      _id: mongoose.Types.ObjectId;
+      name: string;
+      email: string;
+      role: string;
+      status: string;
+      lastActive?: Date;
+    };
+    return {
+      id: u._id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      status: u.status,
+      lastActive: u.lastActive,
+      addedAt: m.addedAt,
+    };
+  });
+
+  res.json(members);
+}
+
+// POST /api/projects/:projectId/users
+export async function addProjectUser(req: AuthRequest, res: Response) {
+  const { email } = req.body;
+  const { projectId } = req.params;
+
+  const project = await Project.findById(projectId);
+  if (!project) throw new AppError("Project not found", 404);
+
+  // Check for duplicate membership
+  let user = await User.findOne({ email }).select("+activationToken +activationTokenExpires");
+
+  if (user) {
+    const alreadyMember = project.members.some(
+      (m) => m.user.toString() === user!._id.toString()
+    );
+    if (alreadyMember) {
+      return res.status(409).json({ message: "User is already a member of this project" });
+    }
+
+    // Existing activated user — add directly
+    if (user.status === "active") {
+      project.members.push({ user: user._id, addedAt: new Date() });
+      await project.save();
+      return res.status(201).json({ message: "User added to project." });
+    }
+
+    // Pending — resend activation
+    const token = generateSecureToken();
+    user.activationToken = token;
+    user.activationTokenExpires = activationExpiryDate();
+    await user.save();
+    project.members.push({ user: user._id, addedAt: new Date() });
+    await project.save();
+    await sendActivationEmail(user.email, user.name, token).catch(() => {});
+    return res.status(201).json({ message: "User added. Activation email resent." });
+  }
+
+  // New user — create pending account and send activation
+  const token = generateSecureToken();
+  user = await User.create({
+    name: email.split("@")[0], // placeholder name; user sets it on activation
+    email,
+    password: generateSecureToken(), // temporary; replaced on activation
+    role: "project_user",
+    status: "pending",
+    activationToken: token,
+    activationTokenExpires: activationExpiryDate(),
+  });
+
+  project.members.push({ user: user._id, addedAt: new Date() });
+  await project.save();
+  await sendActivationEmail(user.email, user.name, token).catch(() => {});
+
+  res.status(201).json({ message: "User invited. Activation email sent." });
+}
+
+// DELETE /api/projects/:projectId/users/:userId
+export async function removeProjectUser(req: AuthRequest, res: Response) {
+  const { projectId, userId } = req.params;
+
+  const project = await Project.findById(projectId);
+  if (!project) throw new AppError("Project not found", 404);
+
+  const initialCount = project.members.length;
+  project.members = project.members.filter(
+    (m) => m.user.toString() !== userId
+  );
+
+  if (project.members.length === initialCount) {
+    throw new AppError("User is not a member of this project", 404);
+  }
+
+  await project.save();
+  res.json({ message: "User removed from project." });
+}
+
+// POST /api/projects/:projectId/users/:userId/resend-activation
+export async function resendUserActivation(req: AuthRequest, res: Response) {
+  const user = await User.findOne({
+    _id: req.params.userId,
+    status: "pending",
+  }).select("+activationToken +activationTokenExpires");
+
+  if (!user) throw new AppError("Pending user not found", 404);
+
+  const token = generateSecureToken();
+  user.activationToken = token;
+  user.activationTokenExpires = activationExpiryDate();
+  await user.save();
+  await sendActivationEmail(user.email, user.name, token).catch(() => {});
+
+  res.json({ message: "Activation email resent." });
+}
+
+// GET /api/users — all users (admin only, for Users page)
+export async function listAllUsers(_req: AuthRequest, res: Response) {
+  const users = await User.find().select("-__v").sort({ createdAt: -1 });
+  res.json(
+    users.map((u) => ({
+      id: u._id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      status: u.status,
+      lastActive: u.lastActive,
+      createdAt: u.createdAt,
+    }))
+  );
+}
