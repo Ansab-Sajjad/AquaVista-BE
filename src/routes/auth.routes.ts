@@ -8,6 +8,8 @@ import {
   resetPassword,
   activateAccount,
   resendActivation,
+  getMe,
+  updateMe,
 } from "../controllers/auth.controller";
 import { authenticate } from "../middleware/auth.middleware";
 import { authRateLimiter } from "../middleware/rateLimiter";
@@ -74,5 +76,8 @@ router.post(
 );
 
 router.post("/logout", authenticate, logout);
+
+router.get("/me", authenticate, getMe);
+router.patch("/me", authenticate, updateMe);
 
 export default router;

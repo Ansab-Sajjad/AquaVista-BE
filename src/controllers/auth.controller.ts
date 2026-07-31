@@ -166,3 +166,41 @@ export async function logout(req: AuthRequest, res: Response) {
 
   res.json({ message: "Logged out successfully." });
 }
+
+// GET /api/auth/me
+export async function getMe(req: AuthRequest, res: Response) {
+  const user = await User.findById(req.user!.id).select(
+    "-password -activationToken -activationTokenExpires -resetToken -resetTokenExpires"
+  );
+  if (!user) throw new AppError("User not found", 404);
+
+  res.json({
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    company: user.company,
+    role: user.role,
+    status: user.status,
+  });
+}
+
+// PATCH /api/auth/me
+export async function updateMe(req: AuthRequest, res: Response) {
+  const { name, company } = req.body;
+  const user = await User.findById(req.user!.id);
+  if (!user) throw new AppError("User not found", 404);
+
+  if (name !== undefined) user.name = name;
+  if (company !== undefined) user.company = company;
+
+  await user.save();
+
+  res.json({
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    company: user.company,
+    role: user.role,
+    status: user.status,
+  });
+}
