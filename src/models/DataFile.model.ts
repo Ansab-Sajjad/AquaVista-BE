@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-export type FileStatus = "processing" | "completed" | "failed";
+export type FileStatus = "Processing" | "Completed" | "Failed";
 
 export const DATA_FILE_TYPES = [
   "Financial Snapshot",
@@ -45,7 +45,7 @@ const DataFileSchema = new Schema<IDataFile>(
     sizeBytes: { type: Number, required: true },
     status: {
       type: String,
-      enum: ["processing", "completed", "failed"],
+      enum: ["Processing", "Completed", "Failed"],
       default: "processing",
     },
   },

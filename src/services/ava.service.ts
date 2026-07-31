@@ -1,7 +1,9 @@
-import https from "https";
+import { GoogleGenAI } from "@google/genai";
 import logger from "../config/logger";
 
-interface AnthropicMessage {
+export type AiProvider = "gemini" | "groq" | "ollama";
+
+interface AvaMessage {
   role: "user" | "assistant";
   content: string;
 }
@@ -10,6 +12,7 @@ interface AvaResponse {
   content: string;
   inputTokens: number;
   outputTokens: number;
+  provider: AiProvider;
 }
 
 const SYSTEM_PROMPT = `You are AVA (AquaVista Assistant), a financial modelling and rate study analyst for municipal water, wastewater, sewer, stormwater, and related utility enterprises.
@@ -32,72 +35,183 @@ STRICT RULES:
 - Budget projections should state assumptions clearly (growth rate, inflation, basis period).
 - Keep responses concise and grounded in facts.`;
 
+async function callGeminiProvider(messages: AvaMessage[], systemPrompt: string): Promise<AvaResponse> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
+
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const ai = new GoogleGenAI({ apiKey });
+
+  const history = messages
+    .map((message) =>
+      message.role === "user"
+        ? `User: ${message.content}`
+        : `Assistant: ${message.content}`
+    )
+    .join("\n\n");
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: `${history}\n\nAssistant:`,
+    config: {
+      systemInstruction: systemPrompt,
+      temperature: 0.0,
+      maxOutputTokens: 1200,
+    },
+  });
+
+  const usageMetadata = response.usageMetadata;
+  return {
+    content: response.text?.trim() || "",
+    inputTokens: usageMetadata?.promptTokenCount || 0,
+    outputTokens: usageMetadata?.candidatesTokenCount || 0,
+    provider: "gemini",
+  };
+}
+
+async function callGroqProvider(messages: AvaMessage[], systemPrompt: string): Promise<AvaResponse> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error("GROQ_API_KEY is not configured");
+
+  const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+
+  const chatMessages = [
+    { role: "system", content: systemPrompt },
+    ...messages.map((m) => ({ role: m.role, content: m.content })),
+  ];
+
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: chatMessages,
+      temperature: 0.0,
+      max_tokens: 1200,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    const error = new Error(`Groq API error (${res.status}): ${errText}`);
+    (error as any).statusCode = res.status;
+    throw error;
+  }
+
+  const data = (await res.json()) as any;
+  const content = data.choices?.[0]?.message?.content || "";
+  const usage = data.usage;
+
+  return {
+    content: content.trim(),
+    inputTokens: usage?.prompt_tokens || 0,
+    outputTokens: usage?.completion_tokens || 0,
+    provider: "groq",
+  };
+}
+
+async function callOllamaProvider(messages: AvaMessage[], systemPrompt: string): Promise<AvaResponse> {
+  const apiKey = process.env.OLLAMA_API_KEY;
+  const baseUrl = process.env.OLLAMA_BASE_URL || "https://openrouter.ai/api/v1/chat/completions";
+  const model = process.env.OLLAMA_MODEL || "deepseek/deepseek-r1:free";
+
+  const chatMessages = [
+    { role: "system", content: systemPrompt },
+    ...messages.map((m) => ({ role: m.role, content: m.content })),
+  ];
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+
+  const res = await fetch(baseUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      messages: chatMessages,
+      temperature: 0.0,
+      max_tokens: 1200,
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    const error = new Error(`Ollama/OpenRouter API error (${res.status}): ${errText}`);
+    (error as any).statusCode = res.status;
+    throw error;
+  }
+
+  const data = (await res.json()) as any;
+  const content = data.choices?.[0]?.message?.content || "";
+  const usage = data.usage;
+
+  return {
+    content: content.trim(),
+    inputTokens: usage?.prompt_tokens || 0,
+    outputTokens: usage?.completion_tokens || 0,
+    provider: "ollama",
+  };
+}
+
 /**
- * Calls the Anthropic Messages API directly via https (no SDK dependency).
+ * Calls the requested AI provider with automatic fallback if quota/rate limit is hit.
  */
 export async function callAva(
-  messages: AnthropicMessage[],
-  dataContext: string
+  messages: AvaMessage[],
+  dataContext: string,
+  preferredProvider: AiProvider = "gemini"
 ): Promise<AvaResponse> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not configured");
-
-  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
-
-  const systemWithContext = dataContext
+  const promptSystem = dataContext
     ? `${SYSTEM_PROMPT}\n\n--- PROJECT DATA CONTEXT ---\n${dataContext}`
     : SYSTEM_PROMPT;
 
-  const body = JSON.stringify({
-    model,
-    max_tokens: 4096,
-    system: systemWithContext,
-    messages,
-  });
+  const allProviders: AiProvider[] = ["gemini", "groq", "ollama"];
+  const providerOrder = [
+    preferredProvider,
+    ...allProviders.filter((p) => p !== preferredProvider),
+  ];
 
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: "api.anthropic.com",
-      path: "/v1/messages",
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "Content-Length": Buffer.byteLength(body),
-      },
-    };
+  let lastError: Error | null = null;
 
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", (chunk) => (data += chunk));
-      res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.error) {
-            return reject(new Error(parsed.error.message || "Anthropic API error"));
-          }
-          resolve({
-            content: parsed.content?.[0]?.text || "",
-            inputTokens: parsed.usage?.input_tokens || 0,
-            outputTokens: parsed.usage?.output_tokens || 0,
-          });
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
+  for (const provider of providerOrder) {
+    try {
+      logger.info(`Attempting AVA call with AI provider: ${provider}`);
+      let result: AvaResponse;
 
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
+      if (provider === "groq") {
+        result = await callGroqProvider(messages, promptSystem);
+      } else if (provider === "ollama") {
+        result = await callOllamaProvider(messages, promptSystem);
+      } else {
+        result = await callGeminiProvider(messages, promptSystem);
+      }
+
+      logger.info(`AVA call succeeded using provider: ${provider}`);
+      return result;
+    } catch (err: any) {
+      lastError = err;
+      const isQuotaError = err.statusCode === 429 || err.message?.toLowerCase().includes("quota") || err.message?.toLowerCase().includes("rate limit");
+      
+      if (isQuotaError) {
+        logger.warn(`AI Provider '${provider}' hit quota/rate limit: ${err.message}. Trying fallback...`);
+      } else {
+        logger.warn(`AI Provider '${provider}' failed: ${err.message}. Trying fallback if available...`);
+      }
+    }
+  }
+
+  throw lastError || new Error("All AI providers failed to process the request.");
 }
 
 /**
  * Builds a text context string from uploaded project data files.
- * In production this would read/parse actual file contents.
- * Returns a placeholder indicating which files are available.
  */
 export function buildDataContext(fileNames: string[]): string {
   if (!fileNames.length) return "No baseline data files have been uploaded for this project yet.";

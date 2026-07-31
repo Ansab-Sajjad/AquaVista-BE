@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { DataFile, DATA_FILE_TYPES } from "../models/DataFile.model";
+import { DocumentTemplate } from "../models/DocumentTemplate.model";
 import { AppError } from "../middleware/errorHandler";
 
 // GET /api/projects/:projectId/data
@@ -50,10 +51,13 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
     status: "processing",
   });
 
-  // Simulate async processing (replace with real parsing pipeline)
+  // Simulate async processing (completes status after quick processing)
   setTimeout(async () => {
     await DataFile.findByIdAndUpdate(dataFile._id, { status: "completed" });
-  }, 2000);
+  }, 1500);
+
+  const { User } = await import("../models/User.model");
+  const user = await User.findById(req.user!.id);
 
   res.status(201).json({
     id: dataFile._id,
@@ -62,6 +66,8 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
     year: dataFile.year,
     status: dataFile.status,
     uploadedAt: dataFile.createdAt,
+    uploadedBy: user?.name || "User",
+    sizeBytes: dataFile.sizeBytes,
   });
 }
 
@@ -98,60 +104,37 @@ export async function deleteDataFile(req: AuthRequest, res: Response) {
   res.json({ message: "File deleted." });
 }
 
-// GET /api/templates — static list of downloadable templates
+// GET /api/projects/:projectId/templates
 export async function listTemplates(_req: AuthRequest, res: Response) {
-  const templates = [
-    {
-      id: "financial-snapshot",
-      name: "Financial Snapshot Template",
-      description: "Standard municipal financial snapshot layout with all required columns.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/financial-snapshot-template.xlsx",
-    },
-    {
-      id: "customer-allocation",
-      name: "Customer Allocation Template",
-      description: "Revenue and consumption by customer class and year.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/customer-allocation-template.xlsx",
-    },
-    {
-      id: "cip-register",
-      name: "CIP Register Template",
-      description: "Capital improvement plan register with required fields.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/cip-register-template.xlsx",
-    },
-    {
-      id: "rate-table",
-      name: "Rate Table Template",
-      description: "Existing rate structure, tiers, and base charges.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/rate-table-template.xlsx",
-    },
-    {
-      id: "demographics",
-      name: "Demographics Template",
-      description: "Population, household, and median income data by year.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/demographics-template.xlsx",
-    },
-  ];
+  const templates = await DocumentTemplate.find().select("-fileData").sort({ name: 1 });
 
-  res.json(templates);
+  res.json(
+    templates.map((t) => ({
+      id: t._id,
+      name: t.name,
+      description: t.description,
+      fileType: t.fileType,
+      originalName: t.originalName,
+      sizeBytes: t.sizeBytes,
+      mimeType: t.mimeType,
+    }))
+  );
 }
 
-// GET /api/templates/:templateId/download
+// GET /api/projects/:projectId/templates/:templateId/download
 export async function downloadTemplate(req: AuthRequest, res: Response) {
-  const templateFile = path.join(
-    __dirname,
-    "../../templates",
-    `${req.params.templateId}-template.xlsx`
-  );
+  const template = await DocumentTemplate.findById(req.params.templateId);
 
-  if (!fs.existsSync(templateFile)) {
+  if (!template) {
     throw new AppError("Template not found", 404);
   }
 
-  res.download(templateFile);
+  res.setHeader("Content-Type", template.mimeType);
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${encodeURIComponent(template.originalName)}"`
+  );
+  res.setHeader("Content-Length", template.sizeBytes.toString());
+
+  res.send(template.fileData);
 }

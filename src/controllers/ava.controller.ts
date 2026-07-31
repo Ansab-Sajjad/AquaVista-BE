@@ -3,7 +3,9 @@ import { AuthRequest } from "../middleware/auth.middleware";
 import { Chat } from "../models/Chat.model";
 import { DataFile } from "../models/DataFile.model";
 import { StartupQuestion } from "../models/StartupQuestion.model";
+import { PinnedItem } from "../models/PinnedItem.model";
 import { AppError } from "../middleware/errorHandler";
+import logger from "../config/logger";
 import { callAva, buildDataContext } from "../services/ava.service";
 import { getProjectUsageToday, incrementUsage } from "../services/usage.service";
 
@@ -49,7 +51,7 @@ export async function getChat(req: AuthRequest, res: Response) {
 // POST /api/projects/:projectId/ava/chats/:chatId/messages
 export async function sendMessage(req: AuthRequest, res: Response) {
   const { projectId, chatId } = req.params;
-  const { content } = req.body;
+  const { content, provider } = req.body;
 
   if (!content?.trim()) throw new AppError("Message content is required", 400);
 
@@ -63,12 +65,16 @@ export async function sendMessage(req: AuthRequest, res: Response) {
     });
   }
 
-  const chat = await Chat.findOne({
-    _id: chatId,
-    project: projectId,
-    user: req.user!.id,
-  });
+  const filter =
+    req.user!.role === "admin"
+      ? { _id: chatId, project: projectId }
+      : { _id: chatId, project: projectId, user: req.user!.id };
+
+  const chat = await Chat.findOne(filter);
   if (!chat) throw new AppError("Chat not found", 404);
+
+  // Store original message count for auto-title logic
+  const originalMessageCount = chat.messages.length;
 
   // Build data context from uploaded files
   const files = await DataFile.find({ project: projectId, status: "completed" }).select(
@@ -79,7 +85,7 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   );
   const dataContext = buildDataContext(fileDescriptions);
 
-  // Build message history for Anthropic
+  // Build message history for Gemini
   const history = chat.messages.map((m) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
@@ -90,20 +96,27 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   let avaContent = "";
   let inputTokens = 0;
   let outputTokens = 0;
+  let avaCallSuccessful = false;
 
   try {
-    const result = await callAva(history, dataContext);
+    const result = await callAva(history, dataContext, provider as "gemini" | "groq" | "ollama");
     avaContent = result.content;
     inputTokens = result.inputTokens;
     outputTokens = result.outputTokens;
+    avaCallSuccessful = true;
   } catch (err) {
-    // Store the user message even if AVA fails
-    chat.messages.push({ role: "user", content, createdAt: new Date() });
-    await chat.save();
-    throw new AppError("AVA is temporarily unavailable. Please try again.", 503);
+    logger.error("AVA call failed", {
+      error: err instanceof Error ? err.message : err,
+      stack: err instanceof Error ? err.stack : undefined,
+      projectId,
+      chatId,
+      userId: req.user?.id,
+    });
+    // Set a fallback error message instead of throwing
+    avaContent = "I apologize, but I'm currently unable to process your request. Please try again later.";
   }
 
-  // Persist messages
+  // Persist messages - always save both user and assistant messages
   chat.messages.push({ role: "user", content, createdAt: new Date() });
   chat.messages.push({
     role: "assistant",
@@ -117,13 +130,17 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   chat.totalInputTokens += inputTokens;
   chat.totalOutputTokens += outputTokens;
 
-  // Auto-title on first exchange
-  if (chat.messages.length === 2) {
+  // Auto-title on first exchange (when chat was empty before this message)
+  if (originalMessageCount === 0) {
     chat.title = content.slice(0, 60) + (content.length > 60 ? "…" : "");
   }
 
   await chat.save();
-  await incrementUsage(projectId, req.user!.id, inputTokens, outputTokens);
+  
+  // Only increment usage if AVA call was successful
+  if (avaCallSuccessful) {
+    await incrementUsage(projectId, req.user!.id, inputTokens, outputTokens);
+  }
 
   const lastTwo = chat.messages.slice(-2);
   res.json({ messages: lastTwo, usage: await getProjectUsageToday(projectId) });
@@ -170,4 +187,96 @@ export async function listUserChats(req: AuthRequest, res: Response) {
     .sort({ updatedAt: -1 });
 
   res.json(chats);
+}
+
+// POST /api/projects/:projectId/ava/chats/:chatId/messages/:messageId/pin
+export async function pinMessage(req: AuthRequest, res: Response) {
+  const { projectId, chatId, messageId } = req.params;
+  const { content, type, title } = req.body;
+
+  const filter =
+    req.user!.role === "admin"
+      ? { _id: chatId, project: projectId }
+      : { _id: chatId, project: projectId, user: req.user!.id };
+
+  const chat = await Chat.findOne(filter);
+  if (!chat) throw new AppError("Chat not found", 404);
+
+  // Find the message in the chat
+  const message = (chat.messages as any).id?.(messageId) || chat.messages.find((m: any) => m._id?.toString() === messageId);
+  if (!message) throw new AppError("Message not found", 404);
+
+  // Check if already pinned
+  const existingPin = await PinnedItem.findOne({
+    project: projectId,
+    sourceChat: chatId,
+  });
+
+  if (existingPin) {
+    // Update existing pinned item
+    existingPin.content = content || message.content;
+    existingPin.type = type || message.type || "narrative";
+    existingPin.title = title || message.title || "AVA response";
+    existingPin.sourceQuestion = chat.title;
+    await existingPin.save();
+    res.json({ id: existingPin._id });
+  } else {
+    // Create new pinned item
+    const pinned = await PinnedItem.create({
+      project: projectId,
+      pinnedBy: req.user!.id,
+      sourceChat: chatId,
+      title: title || message.title || "AVA response",
+      type: type || message.type || "narrative",
+      sourceQuestion: chat.title,
+      content: content || message.content,
+      tableData: message.tableData,
+      chartData: message.chartData,
+    });
+    res.status(201).json({ id: pinned._id });
+  }
+}
+
+// DELETE /api/projects/:projectId/ava/chats/:chatId/messages/:messageId/unpin
+export async function unpinMessage(req: AuthRequest, res: Response) {
+  const { projectId, chatId } = req.params;
+
+  const filter =
+    req.user!.role === "admin"
+      ? { _id: chatId, project: projectId }
+      : { _id: chatId, project: projectId, user: req.user!.id };
+
+  const chat = await Chat.findOne(filter);
+  if (!chat) throw new AppError("Chat not found", 404);
+
+  await PinnedItem.deleteOne({
+    project: projectId,
+    sourceChat: chatId,
+  });
+
+  res.json({ message: "Message unpinned" });
+}
+
+// GET /api/projects/:projectId/ava/chats/:chatId/pinned-messages
+export async function getPinnedMessages(req: AuthRequest, res: Response) {
+  const { projectId, chatId } = req.params;
+
+  const filter =
+    req.user!.role === "admin"
+      ? { _id: chatId, project: projectId }
+      : { _id: chatId, project: projectId, user: req.user!.id };
+
+  const chat = await Chat.findOne(filter);
+  if (!chat) throw new AppError("Chat not found", 404);
+
+  const pinnedItem = await PinnedItem.findOne({
+    project: projectId,
+    sourceChat: chatId,
+  });
+
+  // Return the message IDs that are pinned (in this case, we're using the chat-level pin)
+  // Since the current model pins at chat level, we return the chat ID if pinned
+  const pinnedMessageIds = pinnedItem ? [chatId] : [];
+
+  res.json({ pinnedMessageIds });
 }
