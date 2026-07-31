@@ -5,7 +5,19 @@ import { callAva, buildDataContext } from "../services/ava.service";
 
 async function main() {
   console.log("Testing multi-turn chat with Ask AVA...");
-  const dataContext = buildDataContext(["Water_Rates_2025.xlsx", "CIP_Plan.pdf"]);
+  const dataContext = buildDataContext([
+    {
+      name: "Water_Rates_2025.xlsx",
+      fileType: "Excel",
+      year: "2025",
+      extractedText: "Sample water rates data for 2025...",
+    },
+    {
+      name: "CIP_Plan.pdf",
+      fileType: "PDF",
+      extractedText: "Sample capital improvement plan data...",
+    },
+  ]);
 
   const messages = [
     { role: "user" as const, content: "What baseline files do we have uploaded?" },

@@ -31,8 +31,10 @@
     "morgan": "1.10.0",
     "multer": "1.4.5-lts.1",
     "nodemailer": "6.9.14",
+    "pdf-parse": "^2.4.5",
     "uuid": "10.0.0",
-    "winston": "3.13.0"
+    "winston": "3.13.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/bcryptjs": "2.4.6",
@@ -42,6 +44,7 @@
     "@types/morgan": "1.9.9",
     "@types/multer": "1.4.11",
     "@types/nodemailer": "6.4.15",
+    "@types/pdf-parse": "^1.1.5",
     "@types/uuid": "10.0.0",
     "@typescript-eslint/eslint-plugin": "7.18.0",
     "@typescript-eslint/parser": "7.18.0",

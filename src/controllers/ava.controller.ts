@@ -76,14 +76,19 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   // Store original message count for auto-title logic
   const originalMessageCount = chat.messages.length;
 
-  // Build data context from uploaded files
-  const files = await DataFile.find({ project: projectId, status: "completed" }).select(
-    "originalName fileType year"
+  // Build data context from uploaded files (including extracted text content)
+  const files = await DataFile.find({
+    project: projectId,
+    status: { $in: ["Completed", "completed"] },
+  }).select("originalName fileType year extractedText");
+  const dataContext = buildDataContext(
+    files.map((f) => ({
+      name: f.originalName,
+      fileType: f.fileType,
+      year: f.year,
+      extractedText: f.extractedText || "",
+    }))
   );
-  const fileDescriptions = files.map(
-    (f) => `${f.fileType}${f.year ? ` (${f.year})` : ""}: ${f.originalName}`
-  );
-  const dataContext = buildDataContext(fileDescriptions);
 
   // Build message history for Gemini
   const history = chat.messages.map((m) => ({

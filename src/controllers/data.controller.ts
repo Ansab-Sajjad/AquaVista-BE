@@ -5,6 +5,8 @@ import { AuthRequest } from "../middleware/auth.middleware";
 import { DataFile, DATA_FILE_TYPES } from "../models/DataFile.model";
 import { DocumentTemplate } from "../models/DocumentTemplate.model";
 import { AppError } from "../middleware/errorHandler";
+import { extractTextFromFile } from "../services/document-extractor.service";
+import logger from "../config/logger";
 
 // GET /api/projects/:projectId/data
 export async function listDataFiles(req: AuthRequest, res: Response) {
@@ -51,10 +53,12 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
     status: "processing",
   });
 
-  // Simulate async processing (completes status after quick processing)
-  setTimeout(async () => {
-    await DataFile.findByIdAndUpdate(dataFile._id, { status: "completed" });
-  }, 1500);
+  // Extract text content from uploaded file asynchronously
+  extractAndStoreContent(dataFile._id.toString(), req.file.path, req.file.mimetype)
+    .catch((err) => logger.error("Background extraction failed", {
+      fileId: dataFile._id,
+      error: err instanceof Error ? err.message : err,
+    }));
 
   const { User } = await import("../models/User.model");
   const user = await User.findById(req.user!.id);
@@ -137,4 +141,31 @@ export async function downloadTemplate(req: AuthRequest, res: Response) {
   res.setHeader("Content-Length", template.sizeBytes.toString());
 
   res.send(template.fileData);
+}
+
+/**
+ * Extracts text content from an uploaded file and stores it in the DataFile record.
+ * Called asynchronously after file upload.
+ */
+async function extractAndStoreContent(
+  fileId: string,
+  filePath: string,
+  mimeType: string
+): Promise<void> {
+  try {
+    const extractedText = await extractTextFromFile(filePath, mimeType);
+    await DataFile.findByIdAndUpdate(fileId, {
+      extractedText,
+      extractedAt: new Date(),
+      status: "Completed",
+    });
+    logger.info(`Text extraction completed for file ${fileId}, ${extractedText.length} chars`);
+  } catch (err) {
+    logger.error("Text extraction failed", {
+      fileId,
+      error: err instanceof Error ? err.message : err,
+    });
+    await DataFile.findByIdAndUpdate(fileId, { status: "Failed" });
+    throw err;
+  }
 }
