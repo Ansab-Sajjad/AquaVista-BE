@@ -42,6 +42,11 @@ export function errorHandler(
     return res.status(400).json({ message: "Invalid ID format" });
   }
 
+  // Multer upload errors
+  if ((err as { name?: string }).name === "MulterError") {
+    return res.status(400).json({ message: err.message });
+  }
+
   logger.error(err);
   return res.status(500).json({ message: "Internal server error" });
 }

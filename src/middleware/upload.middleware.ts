@@ -13,6 +13,8 @@ const ALLOWED_MIME_TYPES = [
 
 const MAX_SIZE_BYTES =
   parseInt(process.env.MAX_FILE_SIZE_MB || "50", 10) * 1024 * 1024;
+const MAX_AVATAR_SIZE_BYTES =
+  parseInt(process.env.MAX_AVATAR_SIZE_MB || "5", 10) * 1024 * 1024;
 
 const storage = multer.diskStorage({
   destination(_req, _file, cb) {
@@ -46,3 +48,23 @@ export const uploadMiddleware = multer({
   fileFilter,
   limits: { fileSize: MAX_SIZE_BYTES },
 }).single("file");
+
+const AVATAR_MIME_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+function avatarFileFilter(
+  _req: Request,
+  file: Express.Multer.File,
+  cb: multer.FileFilterCallback
+) {
+  if (AVATAR_MIME_TYPES.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new AppError("Only image files are supported", 415));
+  }
+}
+
+export const avatarUploadMiddleware = multer({
+  storage,
+  fileFilter: avatarFileFilter,
+  limits: { fileSize: MAX_AVATAR_SIZE_BYTES },
+}).single("avatar");

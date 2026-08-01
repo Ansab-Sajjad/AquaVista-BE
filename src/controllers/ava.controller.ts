@@ -215,6 +215,7 @@ export async function pinMessage(req: AuthRequest, res: Response) {
   const existingPin = await PinnedItem.findOne({
     project: projectId,
     sourceChat: chatId,
+    sourceMessage: messageId,
   });
 
   if (existingPin) {
@@ -231,6 +232,7 @@ export async function pinMessage(req: AuthRequest, res: Response) {
       project: projectId,
       pinnedBy: req.user!.id,
       sourceChat: chatId,
+      sourceMessage: messageId,
       title: title || message.title || "AVA response",
       type: type || message.type || "narrative",
       sourceQuestion: chat.title,
@@ -244,7 +246,7 @@ export async function pinMessage(req: AuthRequest, res: Response) {
 
 // DELETE /api/projects/:projectId/ava/chats/:chatId/messages/:messageId/unpin
 export async function unpinMessage(req: AuthRequest, res: Response) {
-  const { projectId, chatId } = req.params;
+  const { projectId, chatId, messageId } = req.params;
 
   const filter =
     req.user!.role === "admin"
@@ -257,6 +259,7 @@ export async function unpinMessage(req: AuthRequest, res: Response) {
   await PinnedItem.deleteOne({
     project: projectId,
     sourceChat: chatId,
+    sourceMessage: messageId,
   });
 
   res.json({ message: "Message unpinned" });
@@ -274,14 +277,14 @@ export async function getPinnedMessages(req: AuthRequest, res: Response) {
   const chat = await Chat.findOne(filter);
   if (!chat) throw new AppError("Chat not found", 404);
 
-  const pinnedItem = await PinnedItem.findOne({
+  const pinnedItems = await PinnedItem.find({
     project: projectId,
     sourceChat: chatId,
   });
 
-  // Return the message IDs that are pinned (in this case, we're using the chat-level pin)
-  // Since the current model pins at chat level, we return the chat ID if pinned
-  const pinnedMessageIds = pinnedItem ? [chatId] : [];
+  const pinnedMessageIds = pinnedItems
+    .map((pin) => pin.sourceMessage?.toString())
+    .filter(Boolean) as string[];
 
   res.json({ pinnedMessageIds });
 }

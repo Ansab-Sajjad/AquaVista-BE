@@ -27,7 +27,9 @@ Edit `.env` and set at minimum:
 | `JWT_SECRET` | Long random string for signing JWTs |
 | `JWT_REFRESH_SECRET` | Separate secret for refresh tokens |
 | `ANTHROPIC_API_KEY` | Your Anthropic API key for AVA |
-| `SMTP_*` | Transactional email credentials (SendGrid, Postmark, etc.) |
+| `GMAIL_USER` | Your full Gmail address (e.g., youremail@gmail.com) |
+| `GMAIL_APP_PASSWORD` | 16-character Gmail App Password (no spaces) |
+| `GMAIL_PORT` | 587 for TLS or 465 for SSL (defaults to 587) |
 | `FRONTEND_URL` | The Next.js app URL (for email links) |
 
 ### 3. Seed the admin user
@@ -189,7 +191,7 @@ src/
 In `AquaVista FE/.env`, add:
 
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:5000/api
+NEXT_PUBLIC_API_URL=http://localhost:5000
 ```
 
 All FE API calls should use this base URL with the JWT from login stored in `localStorage` or a cookie and sent as `Authorization: Bearer <token>`.

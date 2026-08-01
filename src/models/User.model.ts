@@ -12,6 +12,7 @@ export interface IUser extends Document {
   company?: string;
   role: UserRole;
   status: UserStatus;
+  profileImage?: string;
   activationToken?: string;
   activationTokenExpires?: Date;
   resetToken?: string;
@@ -33,6 +34,7 @@ const UserSchema = new Schema<IUser>(
       trim: true,
     },
     company: { type: String, trim: true },
+    profileImage: { type: String, trim: true },
     password: { type: String, required: true, minlength: 8, select: false },
     role: {
       type: String,

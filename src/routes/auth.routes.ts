@@ -10,8 +10,10 @@ import {
   resendActivation,
   getMe,
   updateMe,
+  uploadAvatar,
 } from "../controllers/auth.controller";
 import { authenticate } from "../middleware/auth.middleware";
+import { avatarUploadMiddleware } from "../middleware/upload.middleware";
 import { authRateLimiter } from "../middleware/rateLimiter";
 import { validate } from "./validate";
 
@@ -79,5 +81,6 @@ router.post("/logout", authenticate, logout);
 
 router.get("/me", authenticate, getMe);
 router.patch("/me", authenticate, updateMe);
+router.post("/me/avatar", authenticate, avatarUploadMiddleware, uploadAvatar);
 
 export default router;
