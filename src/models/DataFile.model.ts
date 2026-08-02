@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-export type FileStatus = "processing" | "completed" | "failed";
+export type FileStatus = "Processing" | "Completed" | "Failed" | "processing" | "completed";
 
 export const DATA_FILE_TYPES = [
   "Financial Snapshot",
@@ -27,6 +27,8 @@ export interface IDataFile extends Document {
   mimeType: string;
   sizeBytes: number;
   status: FileStatus;
+  extractedText: string;
+  extractedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,9 +47,11 @@ const DataFileSchema = new Schema<IDataFile>(
     sizeBytes: { type: Number, required: true },
     status: {
       type: String,
-      enum: ["processing", "completed", "failed"],
+      enum: ["Processing", "Completed", "Failed", "processing", "completed"],
       default: "processing",
     },
+    extractedText: { type: String, default: "" },
+    extractedAt: { type: Date },
   },
   { timestamps: true }
 );

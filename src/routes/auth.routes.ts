@@ -10,9 +10,10 @@ import {
   resendActivation,
   getMe,
   updateMe,
-  updatePassword,
+  uploadAvatar,
 } from "../controllers/auth.controller";
 import { authenticate } from "../middleware/auth.middleware";
+import { avatarUploadMiddleware } from "../middleware/upload.middleware";
 import { authRateLimiter } from "../middleware/rateLimiter";
 import { validate } from "./validate";
 
@@ -79,34 +80,7 @@ router.post(
 router.post("/logout", authenticate, logout);
 
 router.get("/me", authenticate, getMe);
-
-router.patch(
-  "/me",
-  authenticate,
-  [
-    body("name").optional().trim().notEmpty().withMessage("Name cannot be empty").isLength({ min: 2 }),
-    body("company").optional().trim(),
-    body("phone").optional().trim(),
-    body("jobTitle").optional().trim(),
-    body("username").optional().trim(),
-    body("location").optional().trim(),
-    body("birthday").optional().trim(),
-    body("gender").optional().trim(),
-    body("bio").optional().trim(),
-  ],
-  validate,
-  updateMe
-);
-
-router.patch(
-  "/me/password",
-  authenticate,
-  [
-    body("currentPassword").notEmpty().withMessage("Current password is required"),
-    body("newPassword").isLength({ min: 8 }).withMessage("New password must be at least 8 characters"),
-  ],
-  validate,
-  updatePassword
-);
+router.patch("/me", authenticate, updateMe);
+router.post("/me/avatar", authenticate, avatarUploadMiddleware, uploadAvatar);
 
 export default router;

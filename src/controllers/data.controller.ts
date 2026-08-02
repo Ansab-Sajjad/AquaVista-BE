@@ -3,7 +3,10 @@ import fs from "fs";
 import path from "path";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { DataFile, DATA_FILE_TYPES } from "../models/DataFile.model";
+import { DocumentTemplate } from "../models/DocumentTemplate.model";
 import { AppError } from "../middleware/errorHandler";
+import { extractTextFromFile } from "../services/document-extractor.service";
+import logger from "../config/logger";
 
 // GET /api/projects/:projectId/data
 export async function listDataFiles(req: AuthRequest, res: Response) {
@@ -50,10 +53,15 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
     status: "processing",
   });
 
-  // Simulate async processing (replace with real parsing pipeline)
-  setTimeout(async () => {
-    await DataFile.findByIdAndUpdate(dataFile._id, { status: "completed" });
-  }, 2000);
+  // Extract text content from uploaded file asynchronously
+  extractAndStoreContent(dataFile._id.toString(), req.file.path, req.file.mimetype)
+    .catch((err) => logger.error("Background extraction failed", {
+      fileId: dataFile._id,
+      error: err instanceof Error ? err.message : err,
+    }));
+
+  const { User } = await import("../models/User.model");
+  const user = await User.findById(req.user!.id);
 
   res.status(201).json({
     id: dataFile._id,
@@ -62,6 +70,8 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
     year: dataFile.year,
     status: dataFile.status,
     uploadedAt: dataFile.createdAt,
+    uploadedBy: user?.name || "User",
+    sizeBytes: dataFile.sizeBytes,
   });
 }
 
@@ -98,60 +108,64 @@ export async function deleteDataFile(req: AuthRequest, res: Response) {
   res.json({ message: "File deleted." });
 }
 
-// GET /api/templates — static list of downloadable templates
+// GET /api/projects/:projectId/templates
 export async function listTemplates(_req: AuthRequest, res: Response) {
-  const templates = [
-    {
-      id: "financial-snapshot",
-      name: "Financial Snapshot Template",
-      description: "Standard municipal financial snapshot layout with all required columns.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/financial-snapshot-template.xlsx",
-    },
-    {
-      id: "customer-allocation",
-      name: "Customer Allocation Template",
-      description: "Revenue and consumption by customer class and year.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/customer-allocation-template.xlsx",
-    },
-    {
-      id: "cip-register",
-      name: "CIP Register Template",
-      description: "Capital improvement plan register with required fields.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/cip-register-template.xlsx",
-    },
-    {
-      id: "rate-table",
-      name: "Rate Table Template",
-      description: "Existing rate structure, tiers, and base charges.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/rate-table-template.xlsx",
-    },
-    {
-      id: "demographics",
-      name: "Demographics Template",
-      description: "Population, household, and median income data by year.",
-      fileType: "xlsx",
-      downloadUrl: "/templates/demographics-template.xlsx",
-    },
-  ];
+  const templates = await DocumentTemplate.find().select("-fileData").sort({ name: 1 });
 
-  res.json(templates);
+  res.json(
+    templates.map((t) => ({
+      id: t._id,
+      name: t.name,
+      description: t.description,
+      fileType: t.fileType,
+      originalName: t.originalName,
+      sizeBytes: t.sizeBytes,
+      mimeType: t.mimeType,
+    }))
+  );
 }
 
-// GET /api/templates/:templateId/download
+// GET /api/projects/:projectId/templates/:templateId/download
 export async function downloadTemplate(req: AuthRequest, res: Response) {
-  const templateFile = path.join(
-    __dirname,
-    "../../templates",
-    `${req.params.templateId}-template.xlsx`
-  );
+  const template = await DocumentTemplate.findById(req.params.templateId);
 
-  if (!fs.existsSync(templateFile)) {
+  if (!template) {
     throw new AppError("Template not found", 404);
   }
 
-  res.download(templateFile);
+  res.setHeader("Content-Type", template.mimeType);
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${encodeURIComponent(template.originalName)}"`
+  );
+  res.setHeader("Content-Length", template.sizeBytes.toString());
+
+  res.send(template.fileData);
+}
+
+/**
+ * Extracts text content from an uploaded file and stores it in the DataFile record.
+ * Called asynchronously after file upload.
+ */
+async function extractAndStoreContent(
+  fileId: string,
+  filePath: string,
+  mimeType: string
+): Promise<void> {
+  try {
+    const extractedText = await extractTextFromFile(filePath, mimeType);
+    await DataFile.findByIdAndUpdate(fileId, {
+      extractedText,
+      extractedAt: new Date(),
+      status: "Completed",
+    });
+    logger.info(`Text extraction completed for file ${fileId}, ${extractedText.length} chars`);
+  } catch (err) {
+    logger.error("Text extraction failed", {
+      fileId,
+      error: err instanceof Error ? err.message : err,
+    });
+    await DataFile.findByIdAndUpdate(fileId, { status: "Failed" });
+    throw err;
+  }
 }

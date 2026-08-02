@@ -7,6 +7,7 @@ export interface IPinnedItem extends Document {
   project: mongoose.Types.ObjectId;
   pinnedBy: mongoose.Types.ObjectId;
   sourceChat: mongoose.Types.ObjectId;
+  sourceMessage?: mongoose.Types.ObjectId;
   title: string;
   type: PinnedItemType;
   sourceQuestion: string;
@@ -22,6 +23,7 @@ const PinnedItemSchema = new Schema<IPinnedItem>(
     project: { type: Schema.Types.ObjectId, ref: "Project", required: true },
     pinnedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
     sourceChat: { type: Schema.Types.ObjectId, ref: "Chat", required: true },
+    sourceMessage: { type: Schema.Types.ObjectId },
     title: { type: String, required: true, trim: true },
     type: { type: String, enum: ["narrative", "table", "chart"], required: true },
     sourceQuestion: { type: String, required: true },
@@ -32,6 +34,6 @@ const PinnedItemSchema = new Schema<IPinnedItem>(
   { timestamps: true }
 );
 
-PinnedItemSchema.index({ project: 1 });
+PinnedItemSchema.index({ project: 1, sourceChat: 1, sourceMessage: 1 }, { unique: true, sparse: true });
 
 export const PinnedItem = mongoose.model<IPinnedItem>("PinnedItem", PinnedItemSchema);

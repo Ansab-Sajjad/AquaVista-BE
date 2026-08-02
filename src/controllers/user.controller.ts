@@ -132,18 +132,82 @@ export async function resendUserActivation(req: AuthRequest, res: Response) {
   res.json({ message: "Activation email resent." });
 }
 
-// GET /api/users — all users (admin only, for Users page)
+// GET /api/projects/admin/users/:userId — single user with their associated projects (admin only)
+export async function getUserById(req: AuthRequest, res: Response) {
+  const user = await User.findById(req.params.userId).select(
+    "name email company role status lastActive createdAt profileImage"
+  );
+
+  if (!user) throw new AppError("User not found", 404);
+
+  const projects = await Project.find({
+    $or: [{ createdBy: user._id }, { members: { $elemMatch: { user: user._id } } }],
+  }).select("name municipality");
+
+  const imageUrl = user.profileImage || null;
+
+  res.json({
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    company: user.company,
+    role: user.role,
+    status: user.status,
+    lastActive: user.lastActive,
+    createdAt: user.createdAt,
+    profileImage: imageUrl,
+    image: imageUrl,
+    projects: projects.map((project) => ({
+      id: project._id,
+      name: project.name,
+      municipality: project.municipality,
+    })),
+  });
+}
+
+// GET /api/projects/admin/users — all users with their associated projects (admin only)
 export async function listAllUsers(_req: AuthRequest, res: Response) {
-  const users = await User.find().select("-__v").sort({ createdAt: -1 });
+  const [users, projects] = await Promise.all([
+    User.find().select("name email company role status lastActive createdAt profileImage").sort({ createdAt: -1 }),
+    Project.find().select("name municipality createdBy members.user"),
+  ]);
+
+  const projectsByUser = new Map<string, { id: mongoose.Types.ObjectId; name: string; municipality: string }[]>();
+
+  for (const project of projects) {
+    const projectSummary = {
+      id: project._id,
+      name: project.name,
+      municipality: project.municipality,
+    };
+    const associatedUserIds = new Set([
+      project.createdBy.toString(),
+      ...project.members.map((member) => member.user.toString()),
+    ]);
+
+    for (const userId of associatedUserIds) {
+      const userProjects = projectsByUser.get(userId) || [];
+      userProjects.push(projectSummary);
+      projectsByUser.set(userId, userProjects);
+    }
+  }
+
   res.json(
-    users.map((u) => ({
-      id: u._id,
-      name: u.name,
-      email: u.email,
-      role: u.role,
-      status: u.status,
-      lastActive: u.lastActive,
-      createdAt: u.createdAt,
-    }))
+    users.map((user) => {
+      const imageUrl = user.profileImage || null;
+      return {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        role: user.role,
+        status: user.status,
+        lastActive: user.lastActive,
+        createdAt: user.createdAt,
+        profileImage: imageUrl,
+        image: imageUrl,
+        projects: projectsByUser.get(user._id.toString()) || [],
+      };
+    })
   );
 }

@@ -1,11 +1,12 @@
 import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
-import { User } from "../models/User.model";
+import { User, IUser } from "../models/User.model";
 import { AppError } from "../middleware/errorHandler";
 import { generateAccessToken, generateSecureToken, activationExpiryDate, resetTokenExpiryDate } from "../services/token.service";
 import { sendActivationEmail, sendPasswordResetEmail } from "../services/email.service";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { denylist } from "../services/token-denylist.service";
+import logger from "../config/logger";
 
 // POST /api/auth/register
 export async function register(req: Request, res: Response) {
@@ -32,8 +33,20 @@ export async function register(req: Request, res: Response) {
   await sendActivationEmail(email, name, token).catch(() => {});
 
   res.status(201).json({
-    message: "Account created. Please check your email to activate your account.",
+    message: "Please check your email to activate your account.",
   });
+}
+
+function buildUserResponse(user: IUser) {
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    company: user.company,
+    role: user.role,
+    status: user.status,
+    image: user.profileImage || null,
+  };
 }
 
 // POST /api/auth/login
@@ -54,20 +67,14 @@ export async function login(req: Request, res: Response) {
 
   res.json({
     token,
-    user: {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      status: user.status,
-    },
+    user: buildUserResponse(user),
   });
 }
 
 // POST /api/auth/forgot-password
 export async function forgotPassword(req: Request, res: Response) {
-  const { email } = req.body;
-  const user = await User.findOne({ email, status: "active" });
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const user = await User.findOne({ email });
 
   // Always respond generically to prevent email enumeration
   const GENERIC = "If an account exists for this email, you'll receive a reset link shortly.";
@@ -77,7 +84,13 @@ export async function forgotPassword(req: Request, res: Response) {
     user.resetToken = token;
     user.resetTokenExpires = resetTokenExpiryDate();
     await user.save();
-    await sendPasswordResetEmail(user.email, user.name, token).catch(() => {});
+    try {
+      await sendPasswordResetEmail(user.email, user.name, token);
+    } catch (error) {
+      logger.error("Password reset email delivery failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   res.json({ message: GENERIC });
@@ -97,6 +110,9 @@ export async function resetPassword(req: Request, res: Response) {
   user.password = password;
   user.resetToken = undefined;
   user.resetTokenExpires = undefined;
+  if (user.status === "pending") {
+    user.status = "active";
+  }
   await user.save();
 
   const accessToken = generateAccessToken(user);
@@ -169,74 +185,36 @@ export async function logout(req: AuthRequest, res: Response) {
 
 // GET /api/auth/me
 export async function getMe(req: AuthRequest, res: Response) {
-  const user = await User.findById(req.user!.id);
+  const user = await User.findById(req.user!.id).select(
+    "-password -activationToken -activationTokenExpires -resetToken -resetTokenExpires"
+  );
   if (!user) throw new AppError("User not found", 404);
 
-  res.json({
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    company: user.company ?? "",
-    phone: user.phone ?? "",
-    jobTitle: user.jobTitle ?? "",
-    username: user.username ?? "",
-    location: user.location ?? "",
-    birthday: user.birthday ?? "",
-    gender: user.gender ?? "",
-    bio: user.bio ?? "",
-    role: user.role,
-    status: user.status,
-  });
+  res.json(buildUserResponse(user));
 }
 
 // PATCH /api/auth/me
 export async function updateMe(req: AuthRequest, res: Response) {
-  const { name, company, phone, jobTitle, username, location, birthday, gender, bio } = req.body;
-
+  const { name, company } = req.body;
   const user = await User.findById(req.user!.id);
   if (!user) throw new AppError("User not found", 404);
 
-  if (name !== undefined) user.name = name.trim();
-  if (company !== undefined) user.company = company.trim();
-  if (phone !== undefined) user.phone = phone.trim();
-  if (jobTitle !== undefined) user.jobTitle = jobTitle.trim();
-  if (username !== undefined) user.username = username.trim();
-  if (location !== undefined) user.location = location.trim();
-  if (birthday !== undefined) user.birthday = birthday.trim();
-  if (gender !== undefined) user.gender = gender.trim();
-  if (bio !== undefined) user.bio = bio.trim();
+  if (name !== undefined) user.name = name;
+  if (company !== undefined) user.company = company;
 
   await user.save();
 
-  res.json({
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    company: user.company ?? "",
-    phone: user.phone ?? "",
-    jobTitle: user.jobTitle ?? "",
-    username: user.username ?? "",
-    location: user.location ?? "",
-    birthday: user.birthday ?? "",
-    gender: user.gender ?? "",
-    bio: user.bio ?? "",
-    role: user.role,
-    status: user.status,
-  });
+  res.json(buildUserResponse(user));
 }
 
-// PATCH /api/auth/me/password
-export async function updatePassword(req: AuthRequest, res: Response) {
-  const { currentPassword, newPassword } = req.body;
-
-  const user = await User.findById(req.user!.id).select("+password");
+// POST /api/auth/me/avatar
+export async function uploadAvatar(req: AuthRequest, res: Response) {
+  if (!req.file) throw new AppError("No image uploaded", 400);
+  const user = await User.findById(req.user!.id);
   if (!user) throw new AppError("User not found", 404);
 
-  const isMatch = await user.comparePassword(currentPassword);
-  if (!isMatch) throw new AppError("Current password is incorrect", 400);
-
-  user.password = newPassword;
+  user.profileImage = `/uploads/${req.file.filename}`;
   await user.save();
 
-  res.json({ message: "Password updated successfully." });
+  res.json(buildUserResponse(user));
 }

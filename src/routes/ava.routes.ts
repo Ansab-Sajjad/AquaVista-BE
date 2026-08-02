@@ -9,6 +9,9 @@ import {
   listStartupQuestions,
   saveStartupQuestions,
   listUserChats,
+  pinMessage,
+  unpinMessage,
+  getPinnedMessages,
 } from "../controllers/ava.controller";
 import {
   authenticate,
@@ -68,6 +71,33 @@ router.post(
   [body("content").trim().notEmpty().withMessage("Message content is required")],
   validate,
   sendMessage
+);
+
+// POST /api/projects/:projectId/ava/chats/:chatId/messages/:messageId/pin
+router.post(
+  "/:projectId/ava/chats/:chatId/messages/:messageId/pin",
+  requireProjectAccess,
+  [
+    body("content").optional().trim(),
+    body("type").optional().isIn(["narrative", "table", "chart"]),
+    body("title").optional().trim(),
+  ],
+  validate,
+  pinMessage
+);
+
+// DELETE /api/projects/:projectId/ava/chats/:chatId/messages/:messageId/unpin
+router.delete(
+  "/:projectId/ava/chats/:chatId/messages/:messageId/unpin",
+  requireProjectAccess,
+  unpinMessage
+);
+
+// GET /api/projects/:projectId/ava/chats/:chatId/pinned-messages
+router.get(
+  "/:projectId/ava/chats/:chatId/pinned-messages",
+  requireProjectAccess,
+  getPinnedMessages
 );
 
 export default router;
