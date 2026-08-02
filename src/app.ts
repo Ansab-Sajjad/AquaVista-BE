@@ -19,9 +19,14 @@ const app = express();
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
 // CORS — allow the Next.js frontend
+const allowedOrigins =
+  process.env.NODE_ENV === "production"
+    ? ["https://aqua-vista-fe.vercel.app"]
+    : ["http://localhost:3000"];
+
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
+    origin: allowedOrigins,
     credentials: true,
   })
 );
