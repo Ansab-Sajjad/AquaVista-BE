@@ -10,6 +10,13 @@ export interface IUser extends Document {
   email: string;
   password: string;
   company?: string;
+  phone?: string;
+  jobTitle?: string;
+  username?: string;
+  location?: string;
+  birthday?: string;
+  gender?: string;
+  bio?: string;
   role: UserRole;
   status: UserStatus;
   profileImage?: string;

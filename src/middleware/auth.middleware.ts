@@ -22,9 +22,13 @@ export function authenticate(req: AuthRequest, _res: Response, next: NextFunctio
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET not configured");
 
+  // Check denylist before verifying — revoked tokens are rejected immediately
+  if (denylist.has(token)) {
+    throw new AppError("Token has been revoked", 401);
+  }
+
   try {
     const payload = jwt.verify(token, secret) as { id: string; role: string };
-    if (denylist.has(token)) throw new AppError("Token has been revoked", 401);
     req.user = { id: payload.id, role: payload.role };
     next();
   } catch {
