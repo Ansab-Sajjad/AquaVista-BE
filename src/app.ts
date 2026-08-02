@@ -16,7 +16,7 @@ import userRoutes from "./routes/user.routes";
 const app = express();
 
 // Security headers
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 
 // CORS — allow the Next.js frontend
 app.use(

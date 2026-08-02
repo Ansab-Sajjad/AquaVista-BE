@@ -11,9 +11,10 @@ import { getProjectUsageToday, incrementUsage } from "../services/usage.service"
 
 // GET /api/projects/:projectId/ava/chats
 export async function listChats(req: AuthRequest, res: Response) {
+  const requestedUserId = typeof req.query.userId === "string" ? req.query.userId : undefined;
   const filter =
-    req.user!.role === "admin" && req.query.userId
-      ? { project: req.params.projectId, user: req.query.userId }
+    req.user!.role === "admin" && requestedUserId
+      ? { project: req.params.projectId, user: requestedUserId }
       : { project: req.params.projectId, user: req.user!.id };
 
   const chats = await Chat.find(filter)
@@ -37,9 +38,14 @@ export async function createChat(req: AuthRequest, res: Response) {
 
 // GET /api/projects/:projectId/ava/chats/:chatId
 export async function getChat(req: AuthRequest, res: Response) {
+  const requestedUserId = typeof req.query.userId === "string" ? req.query.userId : undefined;
   const filter =
     req.user!.role === "admin"
-      ? { _id: req.params.chatId, project: req.params.projectId }
+      ? {
+          _id: req.params.chatId,
+          project: req.params.projectId,
+          ...(requestedUserId ? { user: requestedUserId } : {}),
+        }
       : { _id: req.params.chatId, project: req.params.projectId, user: req.user!.id };
 
   const chat = await Chat.findOne(filter);

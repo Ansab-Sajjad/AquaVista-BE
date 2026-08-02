@@ -135,7 +135,7 @@ export async function resendUserActivation(req: AuthRequest, res: Response) {
 // GET /api/projects/admin/users/:userId — single user with their associated projects (admin only)
 export async function getUserById(req: AuthRequest, res: Response) {
   const user = await User.findById(req.params.userId).select(
-    "name email company role status lastActive createdAt"
+    "name email company role status lastActive createdAt profileImage"
   );
 
   if (!user) throw new AppError("User not found", 404);
@@ -143,6 +143,8 @@ export async function getUserById(req: AuthRequest, res: Response) {
   const projects = await Project.find({
     $or: [{ createdBy: user._id }, { members: { $elemMatch: { user: user._id } } }],
   }).select("name municipality");
+
+  const imageUrl = user.profileImage || null;
 
   res.json({
     id: user._id,
@@ -153,6 +155,8 @@ export async function getUserById(req: AuthRequest, res: Response) {
     status: user.status,
     lastActive: user.lastActive,
     createdAt: user.createdAt,
+    profileImage: imageUrl,
+    image: imageUrl,
     projects: projects.map((project) => ({
       id: project._id,
       name: project.name,
@@ -164,7 +168,7 @@ export async function getUserById(req: AuthRequest, res: Response) {
 // GET /api/projects/admin/users — all users with their associated projects (admin only)
 export async function listAllUsers(_req: AuthRequest, res: Response) {
   const [users, projects] = await Promise.all([
-    User.find().select("name email company role status lastActive createdAt").sort({ createdAt: -1 }),
+    User.find().select("name email company role status lastActive createdAt profileImage").sort({ createdAt: -1 }),
     Project.find().select("name municipality createdBy members.user"),
   ]);
 
@@ -189,16 +193,21 @@ export async function listAllUsers(_req: AuthRequest, res: Response) {
   }
 
   res.json(
-    users.map((user) => ({
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      company: user.company,
-      role: user.role,
-      status: user.status,
-      lastActive: user.lastActive,
-      createdAt: user.createdAt,
-      projects: projectsByUser.get(user._id.toString()) || [],
-    }))
+    users.map((user) => {
+      const imageUrl = user.profileImage || null;
+      return {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        company: user.company,
+        role: user.role,
+        status: user.status,
+        lastActive: user.lastActive,
+        createdAt: user.createdAt,
+        profileImage: imageUrl,
+        image: imageUrl,
+        projects: projectsByUser.get(user._id.toString()) || [],
+      };
+    })
   );
 }
