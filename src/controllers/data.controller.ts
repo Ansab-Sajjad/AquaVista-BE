@@ -6,6 +6,8 @@ import { DataFile, DATA_FILE_TYPES } from "../models/DataFile.model";
 import { DocumentTemplate } from "../models/DocumentTemplate.model";
 import { AppError } from "../middleware/errorHandler";
 import { extractTextFromFile } from "../services/document-extractor.service";
+import { createNotification } from "../services/notification.service";
+import { Project } from "../models/Project.model";
 import logger from "../config/logger";
 
 // GET /api/projects/:projectId/data
@@ -146,13 +148,21 @@ export async function downloadTemplate(req: AuthRequest, res: Response) {
 /**
  * Extracts text content from an uploaded file and stores it in the DataFile record.
  * Called asynchronously after file upload.
+ * On completion or failure, fans out a notification to every project member.
  */
 async function extractAndStoreContent(
   fileId: string,
   filePath: string,
   mimeType: string
 ): Promise<void> {
+  let originalName = "";
+  let projectId: import("mongoose").Types.ObjectId | undefined;
+
   try {
+    const file = await DataFile.findById(fileId);
+    originalName = file?.originalName ?? "file";
+    projectId = file?.project as import("mongoose").Types.ObjectId | undefined;
+
     const extractedText = await extractTextFromFile(filePath, mimeType);
     await DataFile.findByIdAndUpdate(fileId, {
       extractedText,
@@ -160,12 +170,65 @@ async function extractAndStoreContent(
       status: "Completed",
     });
     logger.info(`Text extraction completed for file ${fileId}, ${extractedText.length} chars`);
+
+    // Fan out file_upload_complete notifications to all project members
+    if (projectId) {
+      try {
+        const project = await Project.findById(projectId);
+        if (project) {
+          await Promise.all(
+            project.members.map((m) =>
+              createNotification({
+                recipient: m.user,
+                type: "system",
+                category: "file_upload_complete",
+                title: `File processed: ${originalName}`,
+                message: `The file "${originalName}" has been processed successfully and is now available for analysis.`,
+                projectId,
+              })
+            )
+          );
+        }
+      } catch (notifErr) {
+        logger.error("Failed to send file_upload_complete notifications", {
+          fileId,
+          error: notifErr instanceof Error ? notifErr.message : notifErr,
+        });
+      }
+    }
   } catch (err) {
     logger.error("Text extraction failed", {
       fileId,
       error: err instanceof Error ? err.message : err,
     });
     await DataFile.findByIdAndUpdate(fileId, { status: "Failed" });
+
+    // Fan out file_upload_failed notifications to all project members
+    if (projectId) {
+      try {
+        const project = await Project.findById(projectId);
+        if (project) {
+          await Promise.all(
+            project.members.map((m) =>
+              createNotification({
+                recipient: m.user,
+                type: "system",
+                category: "file_upload_failed",
+                title: `File processing failed: ${originalName}`,
+                message: `The file "${originalName}" could not be processed. Please try re-uploading the file.`,
+                projectId,
+              })
+            )
+          );
+        }
+      } catch (notifErr) {
+        logger.error("Failed to send file_upload_failed notifications", {
+          fileId,
+          error: notifErr instanceof Error ? notifErr.message : notifErr,
+        });
+      }
+    }
+
     throw err;
   }
 }

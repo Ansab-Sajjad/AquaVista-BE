@@ -2,6 +2,9 @@ import { Response } from "express";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { Project } from "../models/Project.model";
 import { AppError } from "../middleware/errorHandler";
+import { createNotification } from "../services/notification.service";
+import mongoose from "mongoose";
+import logger from "../config/logger";
 
 // GET /api/projects
 export async function listProjects(req: AuthRequest, res: Response) {
@@ -41,6 +44,22 @@ export async function createProject(req: AuthRequest, res: Response) {
     createdBy: req.user!.id,
     members: [],
   });
+
+  // Notify the creator
+  try {
+    await createNotification({
+      recipient: new mongoose.Types.ObjectId(req.user!.id),
+      type: "system",
+      category: "project_created",
+      title: `Project created: ${project.name}`,
+      message: `Your project "${project.name}" for ${project.municipality} has been created successfully.`,
+      projectId: project._id,
+    });
+  } catch (err) {
+    logger.error("Failed to send project_created notification", {
+      error: err instanceof Error ? err.message : err,
+    });
+  }
 
   res.status(201).json({
     id: project._id,
