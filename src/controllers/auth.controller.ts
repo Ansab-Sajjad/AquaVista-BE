@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import { OAuth2Client } from "google-auth-library";
 import { User, IUser } from "../models/User.model";
 import { AppError } from "../middleware/errorHandler";
 import { generateAccessToken, generateSecureToken, activationExpiryDate, resetTokenExpiryDate } from "../services/token.service";
@@ -7,6 +8,8 @@ import { sendActivationEmail, sendPasswordResetEmail } from "../services/email.s
 import { AuthRequest } from "../middleware/auth.middleware";
 import { denylist } from "../services/token-denylist.service";
 import logger from "../config/logger";
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // POST /api/auth/register
 export async function register(req: Request, res: Response) {
@@ -116,7 +119,7 @@ export async function resetPassword(req: Request, res: Response) {
   await user.save();
 
   const accessToken = generateAccessToken(user);
-  res.json({ token: accessToken, message: "Password reset successful." });
+  res.json({ token: accessToken, user: buildUserResponse(user), message: "Password reset successful." });
 }
 
 // POST /api/auth/activate
@@ -138,7 +141,7 @@ export async function activateAccount(req: Request, res: Response) {
   await user.save();
 
   const accessToken = generateAccessToken(user);
-  res.json({ token: accessToken, message: "Account activated." });
+  res.json({ token: accessToken, user: buildUserResponse(user), message: "Account activated." });
 }
 
 // POST /api/auth/resend-activation
@@ -217,4 +220,135 @@ export async function uploadAvatar(req: AuthRequest, res: Response) {
   await user.save();
 
   res.json(buildUserResponse(user));
+}
+
+// POST /api/auth/github
+export async function githubSignIn(req: Request, res: Response) {
+  const { code } = req.body;
+  if (!code) throw new AppError("GitHub code is required", 400);
+
+  const clientId =
+    process.env.NODE_ENV === "production"
+      ? process.env.GITHUB_CLIENT_ID_PRODUCTION
+      : process.env.GITHUB_CLIENT_ID_LOCALHOST;
+  const clientSecret =
+    process.env.NODE_ENV === "production"
+      ? process.env.GITHUB_CLIENT_SECRET_PRODUCTION
+      : process.env.GITHUB_CLIENT_SECRET_LOCALHOST;
+
+  // Exchange code for access token
+  const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code }),
+  });
+  const tokenData = (await tokenRes.json()) as { access_token?: string; error?: string };
+  if (!tokenData.access_token) {
+    throw new AppError(tokenData.error || "Failed to obtain GitHub access token", 400);
+  }
+
+  // Fetch user profile
+  const userRes = await fetch("https://api.github.com/user", {
+    headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: "application/json" },
+  });
+  const githubUser = (await userRes.json()) as { email?: string; name?: string; avatar_url?: string; login?: string };
+
+  // GitHub may not expose email publicly — fetch primary verified email
+  let email = githubUser.email;
+  if (!email) {
+    const emailsRes = await fetch("https://api.github.com/user/emails", {
+      headers: { Authorization: `Bearer ${tokenData.access_token}`, Accept: "application/json" },
+    });
+    const emails = (await emailsRes.json()) as { email: string; primary: boolean; verified: boolean }[];
+    const primary = emails.find((e) => e.primary && e.verified);
+    email = primary?.email;
+  }
+
+  if (!email) throw new AppError("Could not retrieve a verified email from GitHub", 400);
+
+  const name = githubUser.name || githubUser.login || email.split("@")[0];
+  const picture = githubUser.avatar_url;
+
+  let user = await User.findOne({ email: email.toLowerCase() });
+
+  if (user) {
+    if (!user.profileImage && picture) user.profileImage = picture;
+    if (user.status === "pending") {
+      user.status = "active";
+      user.activationToken = undefined;
+      user.activationTokenExpires = undefined;
+    }
+    user.lastActive = new Date();
+    await user.save();
+  } else {
+    user = await User.create({
+      name,
+      email: email.toLowerCase(),
+      company: "",
+      password: generateSecureToken(),
+      role: "project_user",
+      status: "active",
+      profileImage: picture || undefined,
+    });
+  }
+
+  const token = generateAccessToken(user);
+  res.json({ token, user: buildUserResponse(user) });
+}
+
+// POST /api/auth/google
+export async function googleSignIn(req: Request, res: Response) {
+  const { credential, flow, userInfo } = req.body;
+  if (!credential) throw new AppError("Google credential is required", 400);
+
+  let email: string | undefined;
+  let name: string | undefined;
+  let picture: string | undefined;
+
+  if (flow === "access_token" && userInfo) {
+    // Access token flow: userInfo already fetched client-side
+    email = userInfo.email;
+    name = userInfo.name;
+    picture = userInfo.picture;
+    if (!email) throw new AppError("Could not retrieve email from Google", 400);
+  } else {
+    // ID token flow: verify the credential server-side
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload?.email) throw new AppError("Invalid Google token", 400);
+    email = payload.email;
+    name = payload.name;
+    picture = payload.picture;
+  }
+
+  let user = await User.findOne({ email: email.toLowerCase() });
+
+  if (user) {
+    if (!user.profileImage && picture) {
+      user.profileImage = picture;
+    }
+    if (user.status === "pending") {
+      user.status = "active";
+      user.activationToken = undefined;
+      user.activationTokenExpires = undefined;
+    }
+    user.lastActive = new Date();
+    await user.save();
+  } else {
+    user = await User.create({
+      name: name || email.split("@")[0],
+      email: email.toLowerCase(),
+      company: "",
+      password: generateSecureToken(),
+      role: "project_user",
+      status: "active",
+      profileImage: picture || undefined,
+    });
+  }
+
+  const token = generateAccessToken(user);
+  res.json({ token, user: buildUserResponse(user) });
 }

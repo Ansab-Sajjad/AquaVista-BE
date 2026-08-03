@@ -11,6 +11,8 @@ import {
   getMe,
   updateMe,
   uploadAvatar,
+  googleSignIn,
+  githubSignIn,
 } from "../controllers/auth.controller";
 import { authenticate } from "../middleware/auth.middleware";
 import { avatarUploadMiddleware } from "../middleware/upload.middleware";
@@ -78,6 +80,22 @@ router.post(
 );
 
 router.post("/logout", authenticate, logout);
+
+router.post(
+  "/google",
+  authRateLimiter,
+  [body("credential").notEmpty().withMessage("Google credential is required")],
+  validate,
+  googleSignIn
+);
+
+router.post(
+  "/github",
+  authRateLimiter,
+  [body("code").notEmpty().withMessage("GitHub code is required")],
+  validate,
+  githubSignIn
+);
 
 router.get("/me", authenticate, getMe);
 router.patch("/me", authenticate, updateMe);

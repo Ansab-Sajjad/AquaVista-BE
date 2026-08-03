@@ -6,6 +6,8 @@ import { User } from "../models/User.model";
 import { AppError } from "../middleware/errorHandler";
 import { generateSecureToken, activationExpiryDate } from "../services/token.service";
 import { sendActivationEmail } from "../services/email.service";
+import { createNotification } from "../services/notification.service";
+import logger from "../config/logger";
 
 // GET /api/projects/:projectId/users
 export async function listProjectUsers(req: AuthRequest, res: Response) {
@@ -61,6 +63,32 @@ export async function addProjectUser(req: AuthRequest, res: Response) {
     if (user.status === "active") {
       project.members.push({ user: user._id, addedAt: new Date() });
       await project.save();
+
+      // Notify existing members (excluding the newly added user)
+      const actorId = new mongoose.Types.ObjectId(req.user!.id);
+      const newUserId = user._id;
+      try {
+        await Promise.all(
+          project.members
+            .filter((m) => !m.user.equals(newUserId))
+            .map((m) =>
+              createNotification({
+                recipient: m.user,
+                type: "user",
+                category: "member_added",
+                title: "New team member added",
+                message: `A new member has been added to project "${project.name}".`,
+                actor: actorId,
+                projectId: project._id,
+              })
+            )
+        );
+      } catch (err) {
+        logger.error("Failed to send member_added notifications", {
+          error: err instanceof Error ? err.message : err,
+        });
+      }
+
       return res.status(201).json({ message: "User added to project." });
     }
 
@@ -72,6 +100,32 @@ export async function addProjectUser(req: AuthRequest, res: Response) {
     project.members.push({ user: user._id, addedAt: new Date() });
     await project.save();
     await sendActivationEmail(user.email, user.name, token).catch(() => {});
+
+    // Notify existing members (excluding the newly added user)
+    try {
+      const actorId = new mongoose.Types.ObjectId(req.user!.id);
+      const newUserId = user._id;
+      await Promise.all(
+        project.members
+          .filter((m) => !m.user.equals(newUserId))
+          .map((m) =>
+            createNotification({
+              recipient: m.user,
+              type: "user",
+              category: "member_added",
+              title: "New team member added",
+              message: `A new member has been added to project "${project.name}".`,
+              actor: actorId,
+              projectId: project._id,
+            })
+          )
+      );
+    } catch (err) {
+      logger.error("Failed to send member_added notifications (pending user)", {
+        error: err instanceof Error ? err.message : err,
+      });
+    }
+
     return res.status(201).json({ message: "User added. Activation email resent." });
   }
 
@@ -90,6 +144,31 @@ export async function addProjectUser(req: AuthRequest, res: Response) {
   project.members.push({ user: user._id, addedAt: new Date() });
   await project.save();
   await sendActivationEmail(user.email, user.name, token).catch(() => {});
+
+  // Notify existing members (excluding the newly added user)
+  try {
+    const actorId = new mongoose.Types.ObjectId(req.user!.id);
+    const newUserId = user._id;
+    await Promise.all(
+      project.members
+        .filter((m) => !m.user.equals(newUserId))
+        .map((m) =>
+          createNotification({
+            recipient: m.user,
+            type: "user",
+            category: "member_added",
+            title: "New team member added",
+            message: `A new member has been invited to project "${project.name}".`,
+            actor: actorId,
+            projectId: project._id,
+          })
+        )
+    );
+  } catch (err) {
+    logger.error("Failed to send member_added notifications (new user)", {
+      error: err instanceof Error ? err.message : err,
+    });
+  }
 
   res.status(201).json({ message: "User invited. Activation email sent." });
 }
@@ -111,6 +190,29 @@ export async function removeProjectUser(req: AuthRequest, res: Response) {
   }
 
   await project.save();
+
+  // Notify remaining members
+  try {
+    const actorId = new mongoose.Types.ObjectId(req.user!.id);
+    await Promise.all(
+      project.members.map((m) =>
+        createNotification({
+          recipient: m.user,
+          type: "user",
+          category: "member_removed",
+          title: "Team member removed",
+          message: `A member has been removed from project "${project.name}".`,
+          actor: actorId,
+          projectId: project._id,
+        })
+      )
+    );
+  } catch (err) {
+    logger.error("Failed to send member_removed notifications", {
+      error: err instanceof Error ? err.message : err,
+    });
+  }
+
   res.json({ message: "User removed from project." });
 }
 

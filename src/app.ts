@@ -10,6 +10,7 @@ import authRoutes from "./routes/auth.routes";
 import dataRoutes from "./routes/data.routes";
 import dashboardRoutes from "./routes/dashboard.routes";
 import avaRoutes from "./routes/ava.routes";
+import notificationRoutes from "./routes/notification.routes";
 import projectRoutes from "./routes/project.routes";
 import userRoutes from "./routes/user.routes";
 
@@ -46,6 +47,7 @@ app.use("/api", generalRateLimiter);
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/projects", userRoutes);
 app.use("/api/projects", dataRoutes);
