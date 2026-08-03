@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { body } from "express-validator";
 import { listProjects, createProject, getProject } from "../controllers/project.controller";
+import { getProjectStats } from "../controllers/stats.controller";
 import { getUserById, listAllUsers } from "../controllers/user.controller";
 import { authenticate, requireAdmin, requireProjectAccess, trackActivity } from "../middleware/auth.middleware";
 import { validate } from "./validate";
@@ -26,6 +27,9 @@ router.post(
 
 // GET /api/projects/:projectId
 router.get("/:projectId", requireProjectAccess, getProject);
+
+// GET /api/projects/:projectId/stats
+router.get("/:projectId/stats", requireProjectAccess, getProjectStats);
 
 // GET /api/users — all users for the global Users page
 router.get("/admin/users/:userId", requireAdmin, getUserById);

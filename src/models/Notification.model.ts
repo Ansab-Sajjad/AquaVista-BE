@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export type NotificationCategory =
+  | "file_uploaded"
   | "file_upload_complete"
   | "file_upload_failed"
   | "member_added"
@@ -30,6 +31,7 @@ const NotificationSchema = new Schema<INotification>(
     category: {
       type: String,
       enum: [
+        "file_uploaded",
         "file_upload_complete",
         "file_upload_failed",
         "member_added",
