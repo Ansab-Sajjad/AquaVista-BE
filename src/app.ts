@@ -12,6 +12,7 @@ import dashboardRoutes from "./routes/dashboard.routes";
 import avaRoutes from "./routes/ava.routes";
 import notificationRoutes from "./routes/notification.routes";
 import projectRoutes from "./routes/project.routes";
+import statsRoutes from "./routes/stats.routes";
 import userRoutes from "./routes/user.routes";
 
 const app = express();
@@ -48,6 +49,7 @@ app.use("/api", generalRateLimiter);
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/stats", statsRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/projects", userRoutes);
 app.use("/api/projects", dataRoutes);

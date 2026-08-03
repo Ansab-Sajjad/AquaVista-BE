@@ -105,6 +105,9 @@ export async function sendMessage(req: AuthRequest, res: Response) {
 
   // Call AVA
   let avaContent = "";
+  let avaType: "narrative" | "table" | "chart" = "narrative";
+  let avaTableData: Record<string, unknown>[] | undefined;
+  let avaChartData: Record<string, unknown> | undefined;
   let inputTokens = 0;
   let outputTokens = 0;
   let avaCallSuccessful = false;
@@ -112,6 +115,9 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   try {
     const result = await callAva(history, dataContext, provider as "gemini" | "groq" | "ollama");
     avaContent = result.content;
+    avaType = result.type;
+    avaTableData = result.tableData as unknown as Record<string, unknown>[] | undefined;
+    avaChartData = result.chartData as unknown as Record<string, unknown> | undefined;
     inputTokens = result.inputTokens;
     outputTokens = result.outputTokens;
     avaCallSuccessful = true;
@@ -132,7 +138,9 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   chat.messages.push({
     role: "assistant",
     content: avaContent,
-    type: "narrative",
+    type: avaType,
+    tableData: avaTableData,
+    chartData: avaChartData,
     title: "AVA response",
     inputTokens,
     outputTokens,
@@ -203,7 +211,7 @@ export async function listUserChats(req: AuthRequest, res: Response) {
 // POST /api/projects/:projectId/ava/chats/:chatId/messages/:messageId/pin
 export async function pinMessage(req: AuthRequest, res: Response) {
   const { projectId, chatId, messageId } = req.params;
-  const { content, type, title } = req.body;
+  const { content, type, title, tableData, chartData } = req.body;
 
   const filter =
     req.user!.role === "admin"
@@ -216,6 +224,9 @@ export async function pinMessage(req: AuthRequest, res: Response) {
   // Find the message in the chat
   const message = (chat.messages as any).id?.(messageId) || chat.messages.find((m: any) => m._id?.toString() === messageId);
   if (!message) throw new AppError("Message not found", 404);
+
+  const resolvedTableData = tableData || message.tableData;
+  const resolvedChartData = chartData || message.chartData;
 
   // Check if already pinned
   const existingPin = await PinnedItem.findOne({
@@ -230,6 +241,8 @@ export async function pinMessage(req: AuthRequest, res: Response) {
     existingPin.type = type || message.type || "narrative";
     existingPin.title = title || message.title || "AVA response";
     existingPin.sourceQuestion = chat.title;
+    existingPin.tableData = resolvedTableData;
+    existingPin.chartData = resolvedChartData;
     await existingPin.save();
     res.json({ id: existingPin._id });
   } else {
@@ -243,8 +256,8 @@ export async function pinMessage(req: AuthRequest, res: Response) {
       type: type || message.type || "narrative",
       sourceQuestion: chat.title,
       content: content || message.content,
-      tableData: message.tableData,
-      chartData: message.chartData,
+      tableData: resolvedTableData,
+      chartData: resolvedChartData,
     });
     res.status(201).json({ id: pinned._id });
   }

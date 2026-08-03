@@ -1,6 +1,7 @@
 import { Response } from "express";
 import fs from "fs";
 import path from "path";
+import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { DataFile, DATA_FILE_TYPES } from "../models/DataFile.model";
 import { DocumentTemplate } from "../models/DocumentTemplate.model";
@@ -54,6 +55,34 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
     sizeBytes: req.file.size,
     status: "processing",
   });
+
+  // Log upload activity immediately — fan out a file_uploaded notification to
+  // every project member so the upload shows up in the activity feed right away
+  // (before async text extraction completes).
+  try {
+    const project = await Project.findById(req.params.projectId);
+    if (project) {
+      await Promise.all(
+        project.members.map((m) =>
+          createNotification({
+            recipient: m.user,
+            actor: new mongoose.Types.ObjectId(req.user!.id),
+            type: "system",
+            category: "file_uploaded",
+            title: `File uploaded: ${req.file!.originalname}`,
+            message: `${req.file!.originalname} (${fileType}) was uploaded to ${project.name} and is being processed.`,
+            projectId: project._id,
+            href: `/projects/${project._id}/data`,
+          })
+        )
+      );
+    }
+  } catch (notifErr) {
+    logger.error("Failed to send file_uploaded notifications", {
+      fileId: dataFile._id,
+      error: notifErr instanceof Error ? notifErr.message : notifErr,
+    });
+  }
 
   // Extract text content from uploaded file asynchronously
   extractAndStoreContent(dataFile._id.toString(), req.file.path, req.file.mimetype)
