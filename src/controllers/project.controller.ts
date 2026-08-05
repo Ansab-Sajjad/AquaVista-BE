@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { Project } from "../models/Project.model";
+import { DataFile } from "../models/DataFile.model";
 import { AppError } from "../middleware/errorHandler";
 import { createNotification } from "../services/notification.service";
 import mongoose from "mongoose";
@@ -17,7 +18,16 @@ export async function listProjects(req: AuthRequest, res: Response) {
     .populate("createdBy", "name email")
     .sort({ updatedAt: -1 });
 
-  // Attach member count instead of raw members array
+  const projectIds = projects.map((p) => p._id);
+  const fileCounts = await DataFile.aggregate([
+    { $match: { project: { $in: projectIds } } },
+    { $group: { _id: "$project", count: { $sum: 1 } } },
+  ]);
+  const fileCountMap = new Map(
+    fileCounts.map((entry) => [String(entry._id), entry.count])
+  );
+
+  // Attach member/file counts instead of raw arrays
   const result = projects.map((p) => ({
     id: p._id,
     name: p.name,
@@ -25,6 +35,7 @@ export async function listProjects(req: AuthRequest, res: Response) {
     description: p.description,
     notes: p.notes,
     teamCount: p.members.length,
+    fileCount: fileCountMap.get(String(p._id)) ?? 0,
     lastUpdated: p.updatedAt,
     createdBy: p.createdBy,
   }));
