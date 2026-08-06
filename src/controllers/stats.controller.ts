@@ -53,7 +53,9 @@ export async function getGlobalStats(req: AuthRequest, res: Response) {
 
   // Projects the user can see
   const projectQuery = isAdmin ? {} : { "members.user": req.user!.id };
-  const projects = await Project.find(projectQuery).select("_id name municipality updatedAt createdAt members").lean();
+  const projects = await Project.find(projectQuery)
+    .select("_id name municipality description updatedAt createdAt members")
+    .lean();
   const projectIds = projects.map((p) => p._id);
 
   const projectFilter = projectIds.length ? { project: { $in: projectIds } } : { project: { $exists: false } };
@@ -151,6 +153,7 @@ export async function getGlobalStats(req: AuthRequest, res: Response) {
         id: pid,
         name: p.name,
         municipality: p.municipality,
+        description: p.description || null,
         memberCount: p.members.length,
         dataFiles: files,
         pinnedItems: pinned,

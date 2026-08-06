@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export type PinnedItemType = "narrative" | "table" | "chart";
+export type PinnedItemScope = "global" | "private";
 
 export interface IPinnedItem extends Document {
   _id: mongoose.Types.ObjectId;
@@ -14,6 +15,13 @@ export interface IPinnedItem extends Document {
   content: string;
   tableData?: Record<string, unknown>[];
   chartData?: Record<string, unknown>;
+  /**
+   * `global` pins (created by admins) are visible to every member of the
+   * project. `private` pins (created by regular users) are only visible to
+   * the user identified by `visibleTo`.
+   */
+  scope: PinnedItemScope;
+  visibleTo?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,10 +38,13 @@ const PinnedItemSchema = new Schema<IPinnedItem>(
     content: { type: String, required: true },
     tableData: { type: [Schema.Types.Mixed] },
     chartData: { type: Schema.Types.Mixed },
+    scope: { type: String, enum: ["global", "private"], default: "private", required: true },
+    visibleTo: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true }
 );
 
+// One pin per source message within a project.
 PinnedItemSchema.index({ project: 1, sourceChat: 1, sourceMessage: 1 }, { unique: true, sparse: true });
 
 export const PinnedItem = mongoose.model<IPinnedItem>("PinnedItem", PinnedItemSchema);
