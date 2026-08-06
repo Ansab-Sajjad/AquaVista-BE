@@ -61,12 +61,12 @@ export async function sendMessage(req: AuthRequest, res: Response) {
 
   if (!content?.trim()) throw new AppError("Message content is required", 400);
 
-  // Enforce usage limit
-  const usage = await getProjectUsageToday(projectId);
+  // Enforce usage limit (per-user within the project)
+  const usage = await getProjectUsageToday(projectId, req.user!.id);
   if (usage.limitReached) {
     return res.status(429).json({
       message:
-        "This project has reached its Ask AVA usage limit for today. Please contact your Admin or try again later.",
+        "You have reached your Ask AVA usage limit for today. Please contact your Admin or try again later.",
       usage,
     });
   }
@@ -162,12 +162,12 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   }
 
   const lastTwo = chat.messages.slice(-2);
-  res.json({ messages: lastTwo, usage: await getProjectUsageToday(projectId) });
+  res.json({ messages: lastTwo, usage: await getProjectUsageToday(projectId, req.user!.id) });
 }
 
 // GET /api/projects/:projectId/ava/usage
 export async function getUsage(req: AuthRequest, res: Response) {
-  const usage = await getProjectUsageToday(req.params.projectId);
+  const usage = await getProjectUsageToday(req.params.projectId, req.user!.id);
   res.json(usage);
 }
 
