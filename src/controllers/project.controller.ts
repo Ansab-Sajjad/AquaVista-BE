@@ -78,6 +78,7 @@ export async function createProject(req: AuthRequest, res: Response) {
     municipality: project.municipality,
     description: project.description,
     teamCount: 0,
+    fileCount: 0,
     lastUpdated: project.updatedAt,
   });
 }
@@ -90,6 +91,8 @@ export async function getProject(req: AuthRequest, res: Response) {
   );
   if (!project) throw new AppError("Project not found", 404);
 
+  const fileCount = await DataFile.countDocuments({ project: project._id });
+
   res.json({
     id: project._id,
     name: project.name,
@@ -97,6 +100,7 @@ export async function getProject(req: AuthRequest, res: Response) {
     description: project.description,
     notes: project.notes,
     teamCount: project.members.length,
+    fileCount,
     lastUpdated: project.updatedAt,
     createdBy: project.createdBy,
     dailyQuestionLimit: project.dailyQuestionLimit,
