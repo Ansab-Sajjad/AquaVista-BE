@@ -1,4 +1,5 @@
 import { Response } from "express";
+import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { Chat } from "../models/Chat.model";
 import { DataFile } from "../models/DataFile.model";
@@ -212,11 +213,11 @@ export async function listUserChats(req: AuthRequest, res: Response) {
 export async function pinMessage(req: AuthRequest, res: Response) {
   const { projectId, chatId, messageId } = req.params;
   const { content, type, title, tableData, chartData } = req.body;
+  const isAdmin = req.user!.role === "admin";
 
-  const filter =
-    req.user!.role === "admin"
-      ? { _id: chatId, project: projectId }
-      : { _id: chatId, project: projectId, user: req.user!.id };
+  const filter = isAdmin
+    ? { _id: chatId, project: projectId }
+    : { _id: chatId, project: projectId, user: req.user!.id };
 
   const chat = await Chat.findOne(filter);
   if (!chat) throw new AppError("Chat not found", 404);
@@ -228,6 +229,11 @@ export async function pinMessage(req: AuthRequest, res: Response) {
   const resolvedTableData = tableData || message.tableData;
   const resolvedChartData = chartData || message.chartData;
 
+  // Admin pins are global (visible to every project member); user pins are
+  // private (visible only to the user who pinned).
+  const scope = isAdmin ? "global" : "private";
+  const visibleTo = isAdmin ? undefined : new mongoose.Types.ObjectId(req.user!.id);
+
   // Check if already pinned
   const existingPin = await PinnedItem.findOne({
     project: projectId,
@@ -236,6 +242,11 @@ export async function pinMessage(req: AuthRequest, res: Response) {
   });
 
   if (existingPin) {
+    // A regular user must not downgrade or take over an admin's global pin.
+    if (!isAdmin && existingPin.scope === "global") {
+      res.json({ id: existingPin._id, scope: existingPin.scope });
+      return;
+    }
     // Update existing pinned item
     existingPin.content = content || message.content;
     existingPin.type = type || message.type || "narrative";
@@ -243,8 +254,11 @@ export async function pinMessage(req: AuthRequest, res: Response) {
     existingPin.sourceQuestion = chat.title;
     existingPin.tableData = resolvedTableData;
     existingPin.chartData = resolvedChartData;
+    existingPin.scope = scope;
+    existingPin.visibleTo = visibleTo;
+    existingPin.pinnedBy = new mongoose.Types.ObjectId(req.user!.id);
     await existingPin.save();
-    res.json({ id: existingPin._id });
+    res.json({ id: existingPin._id, scope });
   } else {
     // Create new pinned item
     const pinned = await PinnedItem.create({
@@ -258,28 +272,38 @@ export async function pinMessage(req: AuthRequest, res: Response) {
       content: content || message.content,
       tableData: resolvedTableData,
       chartData: resolvedChartData,
+      scope,
+      visibleTo,
     });
-    res.status(201).json({ id: pinned._id });
+    res.status(201).json({ id: pinned._id, scope });
   }
 }
 
 // DELETE /api/projects/:projectId/ava/chats/:chatId/messages/:messageId/unpin
 export async function unpinMessage(req: AuthRequest, res: Response) {
   const { projectId, chatId, messageId } = req.params;
+  const isAdmin = req.user!.role === "admin";
 
-  const filter =
-    req.user!.role === "admin"
-      ? { _id: chatId, project: projectId }
-      : { _id: chatId, project: projectId, user: req.user!.id };
+  const filter = isAdmin
+    ? { _id: chatId, project: projectId }
+    : { _id: chatId, project: projectId, user: req.user!.id };
 
   const chat = await Chat.findOne(filter);
   if (!chat) throw new AppError("Chat not found", 404);
 
-  await PinnedItem.deleteOne({
+  // Regular users may only remove their own private pins; admins may remove
+  // any pin within the project.
+  const pinFilter: Record<string, unknown> = {
     project: projectId,
     sourceChat: chatId,
     sourceMessage: messageId,
-  });
+  };
+  if (!isAdmin) {
+    pinFilter.scope = "private";
+    pinFilter.visibleTo = req.user!.id;
+  }
+
+  await PinnedItem.deleteOne(pinFilter);
 
   res.json({ message: "Message unpinned" });
 }
@@ -287,18 +311,23 @@ export async function unpinMessage(req: AuthRequest, res: Response) {
 // GET /api/projects/:projectId/ava/chats/:chatId/pinned-messages
 export async function getPinnedMessages(req: AuthRequest, res: Response) {
   const { projectId, chatId } = req.params;
+  const isAdmin = req.user!.role === "admin";
+  const requestedUserId = typeof req.query.userId === "string" ? req.query.userId : undefined;
 
-  const filter =
-    req.user!.role === "admin"
-      ? { _id: chatId, project: projectId }
-      : { _id: chatId, project: projectId, user: req.user!.id };
+  const filter = isAdmin
+    ? { _id: chatId, project: projectId, ...(requestedUserId ? { user: requestedUserId } : {}) }
+    : { _id: chatId, project: projectId, user: req.user!.id };
 
   const chat = await Chat.findOne(filter);
   if (!chat) throw new AppError("Chat not found", 404);
 
+  // A user sees global pins plus their own private pins. An admin reviewing
+  // another user's chat sees global pins plus that user's private pins.
+  const visibleUser = isAdmin && requestedUserId ? requestedUserId : req.user!.id;
   const pinnedItems = await PinnedItem.find({
     project: projectId,
     sourceChat: chatId,
+    $or: [{ scope: "global" }, { scope: "private", visibleTo: visibleUser }],
   });
 
   const pinnedMessageIds = pinnedItems
