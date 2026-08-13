@@ -4,6 +4,7 @@ import {
   listDataFiles,
   uploadDataFile,
   downloadDataFile,
+  previewDataFile,
   deleteDataFile,
   listTemplates,
   downloadTemplate,
@@ -40,6 +41,13 @@ router.get(
   "/:projectId/data/:fileId/download",
   requireProjectAccess,
   downloadDataFile
+);
+
+// GET /api/projects/:projectId/data/:fileId/preview
+router.get(
+  "/:projectId/data/:fileId/preview",
+  requireProjectAccess,
+  previewDataFile
 );
 
 // DELETE /api/projects/:projectId/data/:fileId  (admin only)

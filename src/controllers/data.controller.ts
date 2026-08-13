@@ -121,6 +121,30 @@ export async function downloadDataFile(req: AuthRequest, res: Response) {
   res.download(path.resolve(file.storagePath), file.originalName);
 }
 
+// GET /api/projects/:projectId/data/:fileId/preview
+// Streams the file inline (Content-Disposition: inline) so the browser can
+// render it in an iframe/embed instead of forcing a download.
+export async function previewDataFile(req: AuthRequest, res: Response) {
+  const file = await DataFile.findOne({
+    _id: req.params.fileId,
+    project: req.params.projectId,
+  });
+
+  if (!file) throw new AppError("File not found", 404);
+  if (!fs.existsSync(file.storagePath)) {
+    throw new AppError("File is no longer available for preview", 404);
+  }
+
+  res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="${encodeURIComponent(file.originalName)}"`
+  );
+  res.setHeader("Content-Length", file.sizeBytes.toString());
+
+  fs.createReadStream(path.resolve(file.storagePath)).pipe(res);
+}
+
 // DELETE /api/projects/:projectId/data/:fileId
 export async function deleteDataFile(req: AuthRequest, res: Response) {
   const file = await DataFile.findOne({

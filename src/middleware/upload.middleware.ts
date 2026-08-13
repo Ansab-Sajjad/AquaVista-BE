@@ -9,6 +9,8 @@ const ALLOWED_MIME_TYPES = [
   "text/csv",
   "application/csv",
   "application/pdf",
+  "application/msword", // .doc
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
 ];
 
 const MAX_SIZE_BYTES =
@@ -39,7 +41,7 @@ function fileFilter(
   if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new AppError("Only .csv, .xlsx and .pdf files are supported", 415));
+    cb(new AppError("Only .csv, .xlsx, .pdf, .doc and .docx files are supported", 415));
   }
 }
 
