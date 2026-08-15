@@ -251,12 +251,19 @@ export async function getMe(req: AuthRequest, res: Response) {
 
 // PATCH /api/auth/me
 export async function updateMe(req: AuthRequest, res: Response) {
-  const { name, company } = req.body;
+  const { name, company, username, location, birthday, gender, bio, phone, jobTitle } = req.body;
   const user = await User.findById(req.user!.id);
   if (!user) throw new AppError("User not found", 404);
 
   if (name !== undefined) user.name = name;
   if (company !== undefined) user.company = company;
+  if (username !== undefined) user.username = username;
+  if (location !== undefined) user.location = location;
+  if (birthday !== undefined) user.birthday = birthday;
+  if (gender !== undefined) user.gender = gender;
+  if (bio !== undefined) user.bio = bio;
+  if (phone !== undefined) user.phone = phone;
+  if (jobTitle !== undefined) user.jobTitle = jobTitle;
 
   await user.save();
 

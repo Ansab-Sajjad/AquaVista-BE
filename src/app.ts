@@ -4,9 +4,11 @@ import express, { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
 import morgan from "morgan";
 import path from "path";
+import swaggerUi from "swagger-ui-express";
 
 import { errorHandler } from "./middleware/errorHandler";
 import { generalRateLimiter } from "./middleware/rateLimiter";
+import { swaggerSpec } from "./config/swagger";
 import authRoutes from "./routes/auth.routes";
 import dataRoutes from "./routes/data.routes";
 import dashboardRoutes from "./routes/dashboard.routes";
@@ -63,6 +65,9 @@ app.use("/api/projects", userRoutes);
 app.use("/api/projects", dataRoutes);
 app.use("/api/projects", avaRoutes);
 app.use("/api/projects", dashboardRoutes);
+
+// API docs
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Health check
 app.get("/health", (_req: Request, res: Response) => {

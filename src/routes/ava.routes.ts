@@ -26,6 +26,23 @@ const router = Router({ mergeParams: true });
 router.use(authenticate, trackActivity);
 
 // GET /api/projects/:projectId/ava/usage
+/**
+ * @swagger
+ * /api/projects/{projectId}/ava/usage:
+ *   get:
+ *     summary: Get AVA usage statistics
+ *     tags: [AVA]
+ *     security: [{ cookieAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: projectId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Usage statistics
+ */
 router.get("/:projectId/ava/usage", requireProjectAccess, getUsage);
 
 // GET /api/projects/:projectId/ava/startup-questions
@@ -50,6 +67,29 @@ router.get(
 );
 
 // GET /api/projects/:projectId/ava/chats
+/**
+ * @swagger
+ * /api/projects/{projectId}/ava/chats:
+ *   get:
+ *     summary: List AVA chats for a project
+ *     tags: [AVA]
+ *     security: [{ cookieAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: projectId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of chats
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Chat'
+ */
 router.get("/:projectId/ava/chats", requireProjectAccess, listChats);
 
 // POST /api/projects/:projectId/ava/chats
@@ -65,6 +105,38 @@ router.post(
 router.get("/:projectId/ava/chats/:chatId", requireProjectAccess, getChat);
 
 // POST /api/projects/:projectId/ava/chats/:chatId/messages
+/**
+ * @swagger
+ * /api/projects/{projectId}/ava/chats/{chatId}/messages:
+ *   post:
+ *     summary: Send a message in an AVA chat
+ *     tags: [AVA]
+ *     security: [{ cookieAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: projectId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: chatId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [content]
+ *             properties:
+ *               content:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: AVA response
+ */
 router.post(
   "/:projectId/ava/chats/:chatId/messages",
   requireProjectAccess,

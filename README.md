@@ -59,17 +59,24 @@ npm start
 
 ## API Reference
 
-All routes are prefixed with `/api`. Protected routes require:
+All routes are prefixed with `/api`. Protected routes require an httpOnly cookie (`access_token`) set by the backend on login/refresh. A Bearer header is also accepted for backward compatibility.
 
-```
-Authorization: Bearer <jwt_token>
-```
+**Interactive API docs (Swagger/OpenAPI)** are available at [`/api/docs`](http://localhost:5000/api/docs) when the server is running.
 
 ### Auth
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/auth/login` | — | Login, returns JWT |
+| POST | `/auth/register` | — | Register a new user (sends activation email) |
+| POST | `/auth/login` | — | Login, sets httpOnly cookies |
+| POST | `/auth/logout` | Auth | Logout, revokes tokens, clears cookies |
+| POST | `/auth/refresh` | — | Refresh access token via refresh cookie |
+| GET | `/auth/me` | Auth | Get current user profile |
+| PATCH | `/auth/me` | Auth | Update profile |
+| PATCH | `/auth/me/password` | Auth | Change password |
+| POST | `/auth/me/avatar` | Auth | Upload avatar |
+| POST | `/auth/google` | — | Google OAuth sign-in |
+| POST | `/auth/github` | — | GitHub OAuth sign-in |
 | POST | `/auth/forgot-password` | — | Request password reset email |
 | POST | `/auth/reset-password` | — | Set new password via token |
 | POST | `/auth/activate` | — | Activate account via token |
@@ -194,4 +201,4 @@ In `AquaVista FE/.env`, add:
 NEXT_PUBLIC_API_URL=http://localhost:5000
 ```
 
-All FE API calls should use this base URL with the JWT from login stored in `localStorage` or a cookie and sent as `Authorization: Bearer <token>`.
+The frontend uses a centralized API client (`src/lib/api-client.ts`) that automatically includes `credentials: "include"` for cookie-based auth. No manual token handling is needed.
