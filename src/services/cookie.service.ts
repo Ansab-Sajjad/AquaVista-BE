@@ -7,11 +7,18 @@ function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
+/**
+ * In production the frontend (aqua-vista-fe.vercel.app) and backend are on
+ * different sites, so cookies must use SameSite=None + Secure to be sent on
+ * cross-site requests. SameSite=Lax would cause the browser to strip the
+ * refresh_token cookie on the cross-site POST /api/auth/refresh call.
+ */
 function cookieOptions(maxAgeMs: number) {
+  const production = isProduction();
   return {
     httpOnly: true,
-    secure: isProduction(),
-    sameSite: "lax" as const,
+    secure: production,
+    sameSite: (production ? "none" : "lax") as "none" | "lax",
     path: "/",
     maxAge: maxAgeMs,
   };
@@ -26,8 +33,15 @@ export function setAuthCookies(res: Response, accessToken: string, refreshToken:
 }
 
 export function clearAuthCookies(res: Response): void {
-  res.clearCookie(ACCESS_TOKEN_COOKIE, { path: "/", httpOnly: true, sameSite: "lax" });
-  res.clearCookie(REFRESH_TOKEN_COOKIE, { path: "/", httpOnly: true, sameSite: "lax" });
+  const production = isProduction();
+  const clearOptions = {
+    path: "/",
+    httpOnly: true,
+    secure: production,
+    sameSite: (production ? "none" : "lax") as "none" | "lax",
+  };
+  res.clearCookie(ACCESS_TOKEN_COOKIE, clearOptions);
+  res.clearCookie(REFRESH_TOKEN_COOKIE, clearOptions);
 }
 
 export function getAccessTokenFromCookie(req: { cookies?: Record<string, string> }): string | null {
