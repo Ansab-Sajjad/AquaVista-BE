@@ -1,36 +1,34 @@
-import fs from "fs";
-import path from "path";
 import logger from "../config/logger";
 
 /**
  * Extracts text content from an uploaded file based on its MIME type.
  * Supports .xlsx, .csv, and .pdf files.
+ * Accepts a Buffer (in-memory file content) instead of a file path.
  */
 export async function extractTextFromFile(
-  filePath: string,
+  fileBuffer: Buffer,
   mimeType: string
 ): Promise<string> {
-  if (!fs.existsSync(filePath)) {
-    logger.warn(`File not found for extraction: ${filePath}`);
+  if (!fileBuffer || fileBuffer.length === 0) {
+    logger.warn("Empty buffer provided for text extraction");
     return "";
   }
 
   try {
     switch (mimeType) {
       case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-        return await extractFromExcel(filePath);
+        return await extractFromExcel(fileBuffer);
       case "text/csv":
       case "application/csv":
-        return await extractFromCsv(filePath);
+        return await extractFromCsv(fileBuffer);
       case "application/pdf":
-        return await extractFromPdf(filePath);
+        return await extractFromPdf(fileBuffer);
       default:
         logger.warn(`Unsupported MIME type for extraction: ${mimeType}`);
         return "";
     }
   } catch (err) {
     logger.error("Text extraction failed", {
-      filePath,
       mimeType,
       error: err instanceof Error ? err.message : err,
     });
@@ -42,9 +40,9 @@ export async function extractTextFromFile(
  * Extracts text from an Excel (.xlsx) file.
  * Converts each sheet into a markdown table.
  */
-async function extractFromExcel(filePath: string): Promise<string> {
+async function extractFromExcel(fileBuffer: Buffer): Promise<string> {
   const XLSX = await import("xlsx");
-  const workbook = XLSX.readFile(filePath, { type: "file" });
+  const workbook = XLSX.read(fileBuffer, { type: "buffer" });
 
   const sections: string[] = [];
 
@@ -86,9 +84,9 @@ async function extractFromExcel(filePath: string): Promise<string> {
  * Extracts text from a CSV file.
  * Uses the xlsx library to parse CSV consistently.
  */
-async function extractFromCsv(filePath: string): Promise<string> {
+async function extractFromCsv(fileBuffer: Buffer): Promise<string> {
   const XLSX = await import("xlsx");
-  const workbook = XLSX.readFile(filePath, { type: "file" });
+  const workbook = XLSX.read(fileBuffer, { type: "buffer" });
 
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) return "No data found in CSV.";
@@ -122,10 +120,9 @@ async function extractFromCsv(filePath: string): Promise<string> {
 /**
  * Extracts text from a PDF file.
  */
-async function extractFromPdf(filePath: string): Promise<string> {
+async function extractFromPdf(fileBuffer: Buffer): Promise<string> {
   const { PDFParse } = await import("pdf-parse");
-  const buffer = fs.readFileSync(filePath);
-  const parser = new PDFParse({ data: buffer });
+  const parser = new PDFParse({ data: fileBuffer });
   const result = await parser.getText();
   return result.text?.trim() || "No text content found in PDF.";
 }

@@ -23,7 +23,8 @@ export interface IDataFile extends Document {
   year?: string;
   notes?: string;
   uploadedBy: mongoose.Types.ObjectId;
-  storagePath: string;
+  storagePath?: string;
+  fileData?: Buffer;
   mimeType: string;
   sizeBytes: number;
   status: FileStatus;
@@ -42,7 +43,8 @@ const DataFileSchema = new Schema<IDataFile>(
     year: { type: String, trim: true },
     notes: { type: String, trim: true },
     uploadedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
-    storagePath: { type: String, required: true },
+    storagePath: { type: String },
+    fileData: { type: Buffer },
     mimeType: { type: String, required: true },
     sizeBytes: { type: Number, required: true },
     status: {

@@ -1,6 +1,4 @@
 import { Response } from "express";
-import fs from "fs";
-import path from "path";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { DataFile, DATA_FILE_TYPES } from "../models/DataFile.model";
@@ -44,13 +42,13 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
 
   const dataFile = await DataFile.create({
     project: req.params.projectId,
-    name: req.file.filename,
+    name: req.file.originalname,
     originalName: req.file.originalname,
     fileType,
     year: year || undefined,
     notes: notes || undefined,
     uploadedBy: req.user!.id,
-    storagePath: req.file.path,
+    fileData: req.file.buffer,
     mimeType: req.file.mimetype,
     sizeBytes: req.file.size,
     status: "processing",
@@ -85,7 +83,7 @@ export async function uploadDataFile(req: AuthRequest, res: Response) {
   }
 
   // Extract text content from uploaded file asynchronously
-  extractAndStoreContent(dataFile._id.toString(), req.file.path, req.file.mimetype)
+  extractAndStoreContent(dataFile._id.toString(), req.file.buffer, req.file.mimetype)
     .catch((err) => logger.error("Background extraction failed", {
       fileId: dataFile._id,
       error: err instanceof Error ? err.message : err,
@@ -111,27 +109,33 @@ export async function downloadDataFile(req: AuthRequest, res: Response) {
   const file = await DataFile.findOne({
     _id: req.params.fileId,
     project: req.params.projectId,
-  });
+  }).select("+fileData");
 
   if (!file) throw new AppError("File not found", 404);
-  if (!fs.existsSync(file.storagePath)) {
+  if (!file.fileData) {
     throw new AppError("File is no longer available for download", 404);
   }
 
-  res.download(path.resolve(file.storagePath), file.originalName);
+  res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${encodeURIComponent(file.originalName)}"`
+  );
+  res.setHeader("Content-Length", file.sizeBytes.toString());
+  res.send(file.fileData);
 }
 
 // GET /api/projects/:projectId/data/:fileId/preview
-// Streams the file inline (Content-Disposition: inline) so the browser can
+// Sends the file inline (Content-Disposition: inline) so the browser can
 // render it in an iframe/embed instead of forcing a download.
 export async function previewDataFile(req: AuthRequest, res: Response) {
   const file = await DataFile.findOne({
     _id: req.params.fileId,
     project: req.params.projectId,
-  });
+  }).select("+fileData");
 
   if (!file) throw new AppError("File not found", 404);
-  if (!fs.existsSync(file.storagePath)) {
+  if (!file.fileData) {
     throw new AppError("File is no longer available for preview", 404);
   }
 
@@ -141,8 +145,7 @@ export async function previewDataFile(req: AuthRequest, res: Response) {
     `inline; filename="${encodeURIComponent(file.originalName)}"`
   );
   res.setHeader("Content-Length", file.sizeBytes.toString());
-
-  fs.createReadStream(path.resolve(file.storagePath)).pipe(res);
+  res.send(file.fileData);
 }
 
 // DELETE /api/projects/:projectId/data/:fileId
@@ -153,11 +156,6 @@ export async function deleteDataFile(req: AuthRequest, res: Response) {
   });
 
   if (!file) throw new AppError("File not found", 404);
-
-  // Remove from disk
-  if (fs.existsSync(file.storagePath)) {
-    fs.unlinkSync(file.storagePath);
-  }
 
   await file.deleteOne();
   res.json({ message: "File deleted." });
@@ -205,7 +203,7 @@ export async function downloadTemplate(req: AuthRequest, res: Response) {
  */
 async function extractAndStoreContent(
   fileId: string,
-  filePath: string,
+  fileBuffer: Buffer,
   mimeType: string
 ): Promise<void> {
   let originalName = "";
@@ -216,7 +214,7 @@ async function extractAndStoreContent(
     originalName = file?.originalName ?? "file";
     projectId = file?.project as import("mongoose").Types.ObjectId | undefined;
 
-    const extractedText = await extractTextFromFile(filePath, mimeType);
+    const extractedText = await extractTextFromFile(fileBuffer, mimeType);
     await DataFile.findByIdAndUpdate(fileId, {
       extractedText,
       extractedAt: new Date(),

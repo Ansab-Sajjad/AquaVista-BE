@@ -3,7 +3,6 @@ import cookieParser from "cookie-parser";
 import express, { NextFunction, Request, Response } from "express";
 import helmet from "helmet";
 import morgan from "morgan";
-import path from "path";
 import swaggerUi from "swagger-ui-express";
 
 import { errorHandler } from "./middleware/errorHandler";
@@ -49,9 +48,6 @@ app.use(express.urlencoded({ extended: true }));
 
 // Cookies
 app.use(cookieParser());
-
-// Static uploads
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
 // Rate limiting
 app.use("/api", generalRateLimiter);

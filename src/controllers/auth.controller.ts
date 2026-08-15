@@ -276,7 +276,8 @@ export async function uploadAvatar(req: AuthRequest, res: Response) {
   const user = await User.findById(req.user!.id);
   if (!user) throw new AppError("User not found", 404);
 
-  user.profileImage = `/uploads/${req.file.filename}`;
+  const base64 = req.file.buffer.toString("base64");
+  user.profileImage = `data:${req.file.mimetype};base64,${base64}`;
   await user.save();
 
   res.json(buildUserResponse(user));

@@ -26,7 +26,7 @@ async function main() {
       { extractedText: "" },
       { extractedText: null },
     ],
-  });
+  }).select("+fileData");
 
   console.log(`Found ${files.length} file(s) to process`);
 
@@ -35,11 +35,17 @@ async function main() {
 
   for (const file of files) {
     console.log(`\nProcessing: ${file.originalName} (${file.mimeType})`);
-    console.log(`  Storage path: ${file.storagePath}`);
+
+    if (!file.fileData) {
+      console.log(`  ⚠ No file data in DB, skipping`);
+      await DataFile.findByIdAndUpdate(file._id, { status: "Failed" });
+      failed++;
+      continue;
+    }
 
     try {
       const extractedText = await extractTextFromFile(
-        file.storagePath,
+        file.fileData,
         file.mimeType
       );
 
