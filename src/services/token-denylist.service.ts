@@ -1,38 +1,25 @@
 /**
- * In-memory JWT denylist for logout invalidation.
- * Tokens are automatically pruned once they reach their expiry.
+ * MongoDB-backed JWT denylist for logout invalidation.
+ * Tokens are automatically pruned by MongoDB's TTL index (expireAfterSeconds: 0).
  */
 
-interface DenylistEntry {
-  expiresAt: Date;
-}
+import { RevokedToken } from "../models/RevokedToken.model";
 
 class TokenDenylist {
-  private store = new Map<string, DenylistEntry>();
-
-  add(token: string, expiresAt: Date): void {
-    this.store.set(token, { expiresAt });
+  async add(token: string, expiresAt: Date): Promise<void> {
+    await RevokedToken.create({ token, expiresAt });
   }
 
-  has(token: string): boolean {
-    const entry = this.store.get(token);
+  async has(token: string): Promise<boolean> {
+    const entry = await RevokedToken.findOne({ token }).lean().exec();
     if (!entry) return false;
 
-    // Auto-prune expired entries on read
     if (entry.expiresAt <= new Date()) {
-      this.store.delete(token);
+      await RevokedToken.deleteOne({ _id: entry._id }).exec();
       return false;
     }
 
     return true;
-  }
-
-  /** Prune all expired tokens — call periodically if needed. */
-  prune(): void {
-    const now = new Date();
-    for (const [token, entry] of this.store.entries()) {
-      if (entry.expiresAt <= now) this.store.delete(token);
-    }
   }
 }
 

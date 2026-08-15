@@ -7,8 +7,22 @@ export function generateAccessToken(user: IUser): string {
   return jwt.sign(
     { id: user._id.toString(), role: user.role },
     secret,
-    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+    { expiresIn: process.env.JWT_EXPIRES_IN || "15m" }
   );
+}
+
+export function generateRefreshToken(user: IUser): string {
+  const secret = process.env.JWT_REFRESH_SECRET!;
+  return jwt.sign(
+    { id: user._id.toString(), role: user.role, type: "refresh" },
+    secret,
+    { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "7d" }
+  );
+}
+
+export function verifyRefreshToken(token: string): { id: string; role: string } {
+  const secret = process.env.JWT_REFRESH_SECRET!;
+  return jwt.verify(token, secret) as { id: string; role: string };
 }
 
 export function generateSecureToken(): string {

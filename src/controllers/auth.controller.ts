@@ -3,10 +3,11 @@ import jwt from "jsonwebtoken";
 import { OAuth2Client } from "google-auth-library";
 import { User, IUser } from "../models/User.model";
 import { AppError } from "../middleware/errorHandler";
-import { generateAccessToken, generateSecureToken, activationExpiryDate, resetTokenExpiryDate } from "../services/token.service";
+import { generateAccessToken, generateRefreshToken, verifyRefreshToken, generateSecureToken, activationExpiryDate, resetTokenExpiryDate } from "../services/token.service";
 import { sendActivationEmail, sendPasswordResetEmail } from "../services/email.service";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { denylist } from "../services/token-denylist.service";
+import { setAuthCookies, clearAuthCookies, getAccessTokenFromCookie, getRefreshTokenFromCookie } from "../services/cookie.service";
 import logger from "../config/logger";
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -26,7 +27,7 @@ export async function register(req: Request, res: Response) {
     name,
     email,
     company,
-    password: generateSecureToken(), // placeholder; replaced on activation
+    authProvider: "local",
     role: "project_user",
     status: "pending",
     activationToken: token,
@@ -48,6 +49,7 @@ function buildUserResponse(user: IUser) {
     company: user.company,
     role: user.role,
     status: user.status,
+    authProvider: user.authProvider,
     image: user.profileImage || null,
   };
 }
@@ -64,12 +66,13 @@ export async function login(req: Request, res: Response) {
     throw new AppError("Invalid email or password", 401);
   }
 
-  const token = generateAccessToken(user);
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
   user.lastActive = new Date();
   await user.save();
 
+  setAuthCookies(res, accessToken, refreshToken);
   res.json({
-    token,
     user: buildUserResponse(user),
   });
 }
@@ -119,7 +122,9 @@ export async function resetPassword(req: Request, res: Response) {
   await user.save();
 
   const accessToken = generateAccessToken(user);
-  res.json({ token: accessToken, user: buildUserResponse(user), message: "Password reset successful." });
+  const refreshToken = generateRefreshToken(user);
+  setAuthCookies(res, accessToken, refreshToken);
+  res.json({ user: buildUserResponse(user), message: "Password reset successful." });
 }
 
 // POST /api/auth/activate
@@ -141,7 +146,9 @@ export async function activateAccount(req: Request, res: Response) {
   await user.save();
 
   const accessToken = generateAccessToken(user);
-  res.json({ token: accessToken, user: buildUserResponse(user), message: "Account activated." });
+  const refreshToken = generateRefreshToken(user);
+  setAuthCookies(res, accessToken, refreshToken);
+  res.json({ user: buildUserResponse(user), message: "Account activated." });
 }
 
 // POST /api/auth/resend-activation
@@ -166,16 +173,30 @@ export async function resendActivation(req: Request, res: Response) {
 
 // POST /api/auth/logout
 export async function logout(req: AuthRequest, res: Response) {
+  // Revoke access token (from cookie or Bearer header)
   const header = req.headers.authorization;
-  if (header?.startsWith("Bearer ")) {
-    const token = header.split(" ")[1];
+  const token = header?.startsWith("Bearer ") ? header.split(" ")[1] : getAccessTokenFromCookie(req);
+  if (token) {
     try {
       const secret = process.env.JWT_SECRET!;
       const payload = jwt.verify(token, secret) as { exp?: number };
-      const expiresAt = payload.exp ? new Date(payload.exp * 1000) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      denylist.add(token, expiresAt);
+      const expiresAt = payload.exp ? new Date(payload.exp * 1000) : new Date(Date.now() + 15 * 60 * 1000);
+      await denylist.add(token, expiresAt);
     } catch {
       // token already invalid — nothing to denylist
+    }
+  }
+
+  // Also revoke refresh token if present
+  const refreshToken = getRefreshTokenFromCookie(req);
+  if (refreshToken) {
+    try {
+      const refreshSecret = process.env.JWT_REFRESH_SECRET!;
+      const refreshPayload = jwt.verify(refreshToken, refreshSecret) as { exp?: number };
+      const refreshExpiresAt = refreshPayload.exp ? new Date(refreshPayload.exp * 1000) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await denylist.add(refreshToken, refreshExpiresAt);
+    } catch {
+      // refresh token already invalid
     }
   }
 
@@ -183,7 +204,39 @@ export async function logout(req: AuthRequest, res: Response) {
     await User.findByIdAndUpdate(req.user.id, { lastActive: new Date() }).catch(() => {});
   }
 
+  clearAuthCookies(res);
   res.json({ message: "Logged out successfully." });
+}
+
+// POST /api/auth/refresh
+export async function refreshToken(req: Request, res: Response) {
+  const refreshCookie = getRefreshTokenFromCookie(req);
+  if (!refreshCookie) {
+    throw new AppError("No refresh token provided", 401);
+  }
+
+  // Check if refresh token has been revoked
+  if (await denylist.has(refreshCookie)) {
+    throw new AppError("Refresh token has been revoked", 401);
+  }
+
+  let payload: { id: string; role: string };
+  try {
+    payload = verifyRefreshToken(refreshCookie);
+  } catch {
+    throw new AppError("Invalid or expired refresh token", 401);
+  }
+
+  const user = await User.findById(payload.id);
+  if (!user || user.status !== "active") {
+    throw new AppError("User not found or inactive", 401);
+  }
+
+  const newAccessToken = generateAccessToken(user);
+  const newRefreshToken = generateRefreshToken(user);
+  setAuthCookies(res, newAccessToken, newRefreshToken);
+
+  res.json({ user: buildUserResponse(user) });
 }
 
 // GET /api/auth/me
@@ -285,15 +338,17 @@ export async function githubSignIn(req: Request, res: Response) {
       name,
       email: email.toLowerCase(),
       company: "",
-      password: generateSecureToken(),
+      authProvider: "github",
       role: "project_user",
       status: "active",
       profileImage: picture || undefined,
     });
   }
 
-  const token = generateAccessToken(user);
-  res.json({ token, user: buildUserResponse(user) });
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+  setAuthCookies(res, accessToken, refreshToken);
+  res.json({ user: buildUserResponse(user) });
 }
 
 // POST /api/auth/google
@@ -342,13 +397,15 @@ export async function googleSignIn(req: Request, res: Response) {
       name: name || email.split("@")[0],
       email: email.toLowerCase(),
       company: "",
-      password: generateSecureToken(),
+      authProvider: "google",
       role: "project_user",
       status: "active",
       profileImage: picture || undefined,
     });
   }
 
-  const token = generateAccessToken(user);
-  res.json({ token, user: buildUserResponse(user) });
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+  setAuthCookies(res, accessToken, refreshToken);
+  res.json({ user: buildUserResponse(user) });
 }

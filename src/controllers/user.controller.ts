@@ -134,7 +134,7 @@ export async function addProjectUser(req: AuthRequest, res: Response) {
   user = await User.create({
     name: email.split("@")[0], // placeholder name; user sets it on activation
     email,
-    password: generateSecureToken(), // temporary; replaced on activation
+    authProvider: "local",
     role: "project_user",
     status: "pending",
     activationToken: token,

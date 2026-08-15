@@ -3,12 +3,14 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export type UserRole = "admin" | "project_user";
 export type UserStatus = "active" | "pending" | "inactive";
+export type AuthProvider = "local" | "github" | "google";
 
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
   name: string;
   email: string;
-  password: string;
+  password?: string;
+  authProvider: AuthProvider;
   company?: string;
   phone?: string;
   jobTitle?: string;
@@ -42,7 +44,12 @@ const UserSchema = new Schema<IUser>(
     },
     company: { type: String, trim: true },
     profileImage: { type: String, trim: true },
-    password: { type: String, required: true, minlength: 8, select: false },
+    password: { type: String, required: false, minlength: 8, select: false },
+    authProvider: {
+      type: String,
+      enum: ["local", "github", "google"],
+      default: "local",
+    },
     role: {
       type: String,
       enum: ["admin", "project_user"],
@@ -65,12 +72,14 @@ const UserSchema = new Schema<IUser>(
 // Hash password before save
 UserSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
+  if (!this.password) return next();
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
 UserSchema.methods.comparePassword = function (candidate: string) {
+  if (!this.password) return false;
   return bcrypt.compare(candidate, this.password);
 };
 

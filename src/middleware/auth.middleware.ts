@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { User } from "../models/User.model";
 import { AppError } from "./errorHandler";
 import { denylist } from "../services/token-denylist.service";
+import { getAccessTokenFromCookie } from "../services/cookie.service";
 
 export interface AuthRequest extends Request {
   user?: {
@@ -12,18 +13,26 @@ export interface AuthRequest extends Request {
   };
 }
 
-export function authenticate(req: AuthRequest, _res: Response, next: NextFunction) {
+export async function authenticate(req: AuthRequest, _res: Response, next: NextFunction) {
+  // Read token from httpOnly cookie first, fall back to Bearer header for backward compat
   const header = req.headers.authorization;
-  if (!header?.startsWith("Bearer ")) {
+  let token: string | null = null;
+
+  if (header?.startsWith("Bearer ")) {
+    token = header.split(" ")[1];
+  } else {
+    token = getAccessTokenFromCookie(req);
+  }
+
+  if (!token) {
     throw new AppError("No token provided", 401);
   }
 
-  const token = header.split(" ")[1];
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error("JWT_SECRET not configured");
 
   // Check denylist before verifying — revoked tokens are rejected immediately
-  if (denylist.has(token)) {
+  if (await denylist.has(token)) {
     throw new AppError("Token has been revoked", 401);
   }
 

@@ -13,6 +13,7 @@ import {
   uploadAvatar,
   googleSignIn,
   githubSignIn,
+  refreshToken,
 } from "../controllers/auth.controller";
 import { authenticate } from "../middleware/auth.middleware";
 import { avatarUploadMiddleware } from "../middleware/upload.middleware";
@@ -80,6 +81,7 @@ router.post(
 );
 
 router.post("/logout", authenticate, logout);
+router.post("/refresh", refreshToken);
 
 router.post(
   "/google",
