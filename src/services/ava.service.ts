@@ -1,5 +1,6 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, createPartFromFunctionResponse, type Content, type Part } from "@google/genai";
 import logger from "../config/logger";
+import { GEMINI_TOOLS, OPENAI_TOOLS, executeAvaTool } from "./ava-tools.service";
 
 export type AiProvider = "gemini" | "groq" | "ollama";
 
@@ -163,104 +164,272 @@ When a basic chart (bar, line, or pie) helps answer the question, append a fence
 \`\`\`
 For pie charts, use a single series with "labels" as the slice labels and "values" as the slice values. Only use bar, line, or pie charts. Do NOT include filters, drilldowns, or interactive controls.
 
-If neither a table nor a chart is appropriate, return a plain narrative answer with no fenced block. You may include both an ava-table and an ava-chart block in the same response when both help.`;
+If neither a table nor a chart is appropriate, return a plain narrative answer with no fenced block. You may include both an ava-table and an ava-chart block in the same response when both help.
 
-async function callGeminiProvider(messages: AvaMessage[], systemPrompt: string): Promise<AvaResponse> {
+TOOL USE — DATA QUERYING:
+You have access to tools that let you query the project's data on demand instead of receiving all data in the context window.
+- Call listDataFiles to see what structured data files (Excel/CSV) are available, including their file types, years, column names, and row counts.
+- Call queryDataRecords to retrieve specific rows from structured data files. You can filter by fileType, year, and column values.
+- Call searchDocuments to semantically search PDF documents (rate resolutions, audit narratives, and other unstructured documents). This returns the most relevant text passages matching your query.
+- ALWAYS call listDataFiles first if you need to understand the schema before querying structured data.
+- For questions about specific financial figures, customer data, rate tables, CIP projects, or demographics, use the structured data tools to get precise values.
+- For questions about document content, policy details, resolution text, or narrative information in PDFs, use searchDocuments.
+- The data context provided below includes summaries of available files (both structured and PDF). Use the tools to retrieve actual content.
+- Do NOT guess or fabricate data — always use the tools to retrieve actual values.
+- You may make multiple tool calls in sequence to gather all the data needed to answer a question.`;
+
+async function callGeminiProvider(
+  messages: AvaMessage[],
+  systemPrompt: string,
+  projectId?: string
+): Promise<AvaResponse> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
 
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
   const ai = new GoogleGenAI({ apiKey });
 
-  const history = messages
-    .map((message) =>
-      message.role === "user"
-        ? `User: ${message.content}`
-        : `Assistant: ${message.content}`
-    )
-    .join("\n\n");
+  // Build contents as structured Content objects (required for tool calling)
+  const contents = messages.map((m) => ({
+    role: m.role === "user" ? "user" : "model",
+    parts: [{ text: m.content }],
+  }));
 
-  const response = await ai.models.generateContent({
+  const config: Record<string, unknown> = {
+    systemInstruction: systemPrompt,
+    temperature: 0.0,
+    maxOutputTokens: 4096,
+  };
+  if (projectId) {
+    config.tools = GEMINI_TOOLS;
+  }
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  const MAX_TOOL_ROUNDS = 5;
+  let currentContents: Content[] = [...contents];
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const response = await ai.models.generateContent({
+      model,
+      contents: currentContents,
+      config,
+    });
+
+    totalInputTokens += response.usageMetadata?.promptTokenCount || 0;
+    totalOutputTokens += response.usageMetadata?.candidatesTokenCount || 0;
+
+    const functionCalls = response.functionCalls;
+    if (!functionCalls || functionCalls.length === 0 || !projectId) {
+      // No function calls — return the text response
+      const rawContent = response.text?.trim() || "";
+      const parsed = parseAvaResponse(rawContent);
+      return {
+        content: parsed.content,
+        type: parsed.type,
+        tableData: parsed.tableData,
+        chartData: parsed.chartData,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        provider: "gemini",
+      };
+    }
+
+    // Execute function calls and build response parts
+    const functionResponseParts: Part[] = [];
+    for (const fc of functionCalls) {
+      const result = await executeAvaTool(fc.name!, fc.args || {}, projectId);
+      functionResponseParts.push(
+        createPartFromFunctionResponse(fc.id || "", fc.name!, result)
+      );
+    }
+
+    // Append model's response and function responses to conversation
+    const modelContent = response.candidates?.[0]?.content;
+    if (modelContent) {
+      currentContents = [...currentContents, modelContent];
+    }
+    currentContents = [
+      ...currentContents,
+      { role: "user", parts: functionResponseParts },
+    ];
+  }
+
+  // Max tool rounds reached — final call without tools
+  logger.warn(`Gemini: max tool rounds (${MAX_TOOL_ROUNDS}) reached, making final call without tools`);
+  const finalConfig = { ...config };
+  delete (finalConfig as Record<string, unknown>).tools;
+  const finalResponse = await ai.models.generateContent({
     model,
-    contents: `${history}\n\nAssistant:`,
-    config: {
-      systemInstruction: systemPrompt,
-      temperature: 0.0,
-      maxOutputTokens: 4096,
-    },
+    contents: currentContents,
+    config: finalConfig,
   });
 
-  const usageMetadata = response.usageMetadata;
-  const rawContent = response.text?.trim() || "";
+  totalInputTokens += finalResponse.usageMetadata?.promptTokenCount || 0;
+  totalOutputTokens += finalResponse.usageMetadata?.candidatesTokenCount || 0;
+
+  const rawContent = finalResponse.text?.trim() || "";
   const parsed = parseAvaResponse(rawContent);
   return {
     content: parsed.content,
     type: parsed.type,
     tableData: parsed.tableData,
     chartData: parsed.chartData,
-    inputTokens: usageMetadata?.promptTokenCount || 0,
-    outputTokens: usageMetadata?.candidatesTokenCount || 0,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
     provider: "gemini",
   };
 }
 
-async function callGroqProvider(messages: AvaMessage[], systemPrompt: string): Promise<AvaResponse> {
+async function callGroqProvider(
+  messages: AvaMessage[],
+  systemPrompt: string,
+  projectId?: string
+): Promise<AvaResponse> {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY is not configured");
 
-  const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+  const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 
-  const chatMessages = [
+  const chatMessages: any[] = [
     { role: "system", content: systemPrompt },
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+  const body: any = {
+    model,
+    messages: chatMessages,
+    temperature: 0.0,
+    max_tokens: 4096,
+  };
+  if (projectId) {
+    body.tools = OPENAI_TOOLS;
+    body.tool_choice = "auto";
+  }
+
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  const MAX_TOOL_ROUNDS = 5;
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      const error = new Error(`Groq API error (${res.status}): ${errText}`);
+      (error as any).statusCode = res.status;
+      throw error;
+    }
+
+    const data = (await res.json()) as any;
+    totalInputTokens += data.usage?.prompt_tokens || 0;
+    totalOutputTokens += data.usage?.completion_tokens || 0;
+
+    const message = data.choices?.[0]?.message;
+
+    if (message?.tool_calls && message.tool_calls.length > 0 && projectId) {
+      // Add assistant message with tool calls to conversation
+      chatMessages.push(message);
+
+      // Execute each tool call
+      for (const tc of message.tool_calls) {
+        const args = JSON.parse(tc.function.arguments || "{}");
+        const result = await executeAvaTool(tc.function.name, args, projectId);
+        chatMessages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify(result),
+        });
+      }
+
+      body.messages = chatMessages;
+      continue;
+    }
+
+    // No tool calls — return text response
+    const rawContent = (message?.content || "").trim();
+    const parsed = parseAvaResponse(rawContent);
+    return {
+      content: parsed.content,
+      type: parsed.type,
+      tableData: parsed.tableData,
+      chartData: parsed.chartData,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      provider: "groq",
+    };
+  }
+
+  // Max tool rounds — final call without tools
+  logger.warn(`Groq: max tool rounds (${MAX_TOOL_ROUNDS}) reached, making final call without tools`);
+  delete body.tools;
+  delete body.tool_choice;
+  body.messages = chatMessages;
+
+  const finalRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages: chatMessages,
-      temperature: 0.0,
-      max_tokens: 4096,
-    }),
+    body: JSON.stringify(body),
   });
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    const error = new Error(`Groq API error (${res.status}): ${errText}`);
-    (error as any).statusCode = res.status;
+  if (!finalRes.ok) {
+    const errText = await finalRes.text().catch(() => "");
+    const error = new Error(`Groq API error (${finalRes.status}): ${errText}`);
+    (error as any).statusCode = finalRes.status;
     throw error;
   }
 
-  const data = (await res.json()) as any;
-  const rawContent = (data.choices?.[0]?.message?.content || "").trim();
-  const usage = data.usage;
-  const parsed = parseAvaResponse(rawContent);
+  const finalData = (await finalRes.json()) as any;
+  totalInputTokens += finalData.usage?.prompt_tokens || 0;
+  totalOutputTokens += finalData.usage?.completion_tokens || 0;
 
+  const rawContent = (finalData.choices?.[0]?.message?.content || "").trim();
+  const parsed = parseAvaResponse(rawContent);
   return {
     content: parsed.content,
     type: parsed.type,
     tableData: parsed.tableData,
     chartData: parsed.chartData,
-    inputTokens: usage?.prompt_tokens || 0,
-    outputTokens: usage?.completion_tokens || 0,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
     provider: "groq",
   };
 }
 
-async function callOllamaProvider(messages: AvaMessage[], systemPrompt: string): Promise<AvaResponse> {
+async function callOllamaProvider(
+  messages: AvaMessage[],
+  systemPrompt: string,
+  projectId?: string
+): Promise<AvaResponse> {
   const apiKey = process.env.OLLAMA_API_KEY;
   const baseUrl = process.env.OLLAMA_BASE_URL || "https://openrouter.ai/api/v1/chat/completions";
   const model = process.env.OLLAMA_MODEL || "deepseek/deepseek-r1:free";
 
-  const chatMessages = [
+  const chatMessages: any[] = [
     { role: "system", content: systemPrompt },
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ];
+
+  const body: any = {
+    model,
+    messages: chatMessages,
+    temperature: 0.0,
+    max_tokens: 4096,
+  };
+  if (projectId) {
+    body.tools = OPENAI_TOOLS;
+    body.tool_choice = "auto";
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -269,47 +438,109 @@ async function callOllamaProvider(messages: AvaMessage[], systemPrompt: string):
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
 
-  const res = await fetch(baseUrl, {
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  const MAX_TOOL_ROUNDS = 5;
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const res = await fetch(baseUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      const error = new Error(`Ollama/OpenRouter API error (${res.status}): ${errText}`);
+      (error as any).statusCode = res.status;
+      throw error;
+    }
+
+    const data = (await res.json()) as any;
+    totalInputTokens += data.usage?.prompt_tokens || 0;
+    totalOutputTokens += data.usage?.completion_tokens || 0;
+
+    const message = data.choices?.[0]?.message;
+
+    if (message?.tool_calls && message.tool_calls.length > 0 && projectId) {
+      // Add assistant message with tool calls to conversation
+      chatMessages.push(message);
+
+      // Execute each tool call
+      for (const tc of message.tool_calls) {
+        const args = JSON.parse(tc.function.arguments || "{}");
+        const result = await executeAvaTool(tc.function.name, args, projectId);
+        chatMessages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: JSON.stringify(result),
+        });
+      }
+
+      body.messages = chatMessages;
+      continue;
+    }
+
+    // No tool calls — return text response
+    const rawContent = (message?.content || "").trim();
+    const parsed = parseAvaResponse(rawContent);
+    return {
+      content: parsed.content,
+      type: parsed.type,
+      tableData: parsed.tableData,
+      chartData: parsed.chartData,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      provider: "ollama",
+    };
+  }
+
+  // Max tool rounds — final call without tools
+  logger.warn(`Ollama: max tool rounds (${MAX_TOOL_ROUNDS}) reached, making final call without tools`);
+  delete body.tools;
+  delete body.tool_choice;
+  body.messages = chatMessages;
+
+  const finalRes = await fetch(baseUrl, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model,
-      messages: chatMessages,
-      temperature: 0.0,
-      max_tokens: 4096,
-    }),
+    body: JSON.stringify(body),
   });
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    const error = new Error(`Ollama/OpenRouter API error (${res.status}): ${errText}`);
-    (error as any).statusCode = res.status;
+  if (!finalRes.ok) {
+    const errText = await finalRes.text().catch(() => "");
+    const error = new Error(`Ollama/OpenRouter API error (${finalRes.status}): ${errText}`);
+    (error as any).statusCode = finalRes.status;
     throw error;
   }
 
-  const data = (await res.json()) as any;
-  const rawContent = (data.choices?.[0]?.message?.content || "").trim();
-  const usage = data.usage;
-  const parsed = parseAvaResponse(rawContent);
+  const finalData = (await finalRes.json()) as any;
+  totalInputTokens += finalData.usage?.prompt_tokens || 0;
+  totalOutputTokens += finalData.usage?.completion_tokens || 0;
 
+  const rawContent = (finalData.choices?.[0]?.message?.content || "").trim();
+  const parsed = parseAvaResponse(rawContent);
   return {
     content: parsed.content,
     type: parsed.type,
     tableData: parsed.tableData,
     chartData: parsed.chartData,
-    inputTokens: usage?.prompt_tokens || 0,
-    outputTokens: usage?.completion_tokens || 0,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
     provider: "ollama",
   };
 }
 
 /**
  * Calls the requested AI provider with automatic fallback if quota/rate limit is hit.
+ * When projectId is provided, tool calling is enabled — the AI can query structured
+ * data files on demand instead of receiving all data in the context window.
  */
 export async function callAva(
   messages: AvaMessage[],
   dataContext: string,
-  preferredProvider: AiProvider = "gemini"
+  preferredProvider: AiProvider = "gemini",
+  projectId?: string
 ): Promise<AvaResponse> {
   const promptSystem = dataContext
     ? `${SYSTEM_PROMPT}\n\n--- PROJECT DATA CONTEXT ---\n${dataContext}`
@@ -325,15 +556,15 @@ export async function callAva(
 
   for (const provider of providerOrder) {
     try {
-      logger.info(`Attempting AVA call with AI provider: ${provider}`);
+      logger.info(`Attempting AVA call with AI provider: ${provider}${projectId ? " (tool-calling enabled)" : ""}`);
       let result: AvaResponse;
 
       if (provider === "groq") {
-        result = await callGroqProvider(messages, promptSystem);
+        result = await callGroqProvider(messages, promptSystem, projectId);
       } else if (provider === "ollama") {
-        result = await callOllamaProvider(messages, promptSystem);
+        result = await callOllamaProvider(messages, promptSystem, projectId);
       } else {
-        result = await callGeminiProvider(messages, promptSystem);
+        result = await callGeminiProvider(messages, promptSystem, projectId);
       }
 
       logger.info(`AVA call succeeded using provider: ${provider}`);
@@ -341,7 +572,7 @@ export async function callAva(
     } catch (err: any) {
       lastError = err;
       const isQuotaError = err.statusCode === 429 || err.message?.toLowerCase().includes("quota") || err.message?.toLowerCase().includes("rate limit");
-      
+
       if (isQuotaError) {
         logger.warn(`AI Provider '${provider}' hit quota/rate limit: ${err.message}. Trying fallback...`);
       } else {

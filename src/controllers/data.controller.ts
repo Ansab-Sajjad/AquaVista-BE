@@ -5,7 +5,18 @@ import { DataFile, DATA_FILE_TYPES } from "../models/DataFile.model";
 import { DocumentTemplate } from "../models/DocumentTemplate.model";
 import { AppError } from "../middleware/errorHandler";
 import { extractTextFromFile } from "../services/document-extractor.service";
+import {
+  parseStructuredFile,
+  storeDataRecords,
+  deleteDataRecords,
+  isStructuredFile,
+} from "../services/structured-parser.service";
+import {
+  storeDocumentChunks,
+  deleteDocumentChunks,
+} from "../services/embedding.service";
 import { createNotification } from "../services/notification.service";
+import { invalidateProjectDataContext } from "../services/data-context.service";
 import { Project } from "../models/Project.model";
 import logger from "../config/logger";
 
@@ -158,6 +169,31 @@ export async function deleteDataFile(req: AuthRequest, res: Response) {
   if (!file) throw new AppError("File not found", 404);
 
   await file.deleteOne();
+
+  // Clean up associated DataRecords (structured file rows)
+  await deleteDataRecords(req.params.fileId).catch((err) =>
+    logger.warn("Failed to delete DataRecords for deleted file", {
+      fileId: req.params.fileId,
+      error: err instanceof Error ? err.message : err,
+    })
+  );
+
+  // Clean up associated DocumentChunks (PDF embeddings)
+  await deleteDocumentChunks(req.params.fileId).catch((err) =>
+    logger.warn("Failed to delete DocumentChunks for deleted file", {
+      fileId: req.params.fileId,
+      error: err instanceof Error ? err.message : err,
+    })
+  );
+
+  // Invalidate AVA data context cache since the file set changed
+  await invalidateProjectDataContext(req.params.projectId).catch((err) =>
+    logger.warn("Failed to invalidate AVA context cache after file deletion", {
+      fileId: req.params.fileId,
+      error: err instanceof Error ? err.message : err,
+    })
+  );
+
   res.json({ message: "File deleted." });
 }
 
@@ -221,6 +257,60 @@ async function extractAndStoreContent(
       status: "Completed",
     });
     logger.info(`Text extraction completed for file ${fileId}, ${extractedText.length} chars`);
+
+    // For structured files (Excel/CSV), also parse into DataRecord rows
+    // for tool-based querying by AVA
+    if (isStructuredFile(mimeType) && projectId) {
+      try {
+        const parsed = await parseStructuredFile(fileBuffer, mimeType);
+        const rowCount = await storeDataRecords(
+          projectId.toString(),
+          fileId,
+          file!.fileType,
+          file!.year,
+          parsed
+        );
+        logger.info(`Structured parsing completed for file ${fileId}, ${rowCount} rows stored`);
+      } catch (parseErr) {
+        logger.error("Structured parsing failed (text extraction still succeeded)", {
+          fileId,
+          error: parseErr instanceof Error ? parseErr.message : parseErr,
+        });
+      }
+    }
+
+    // For PDF files, chunk and embed the text for semantic search (RAG)
+    if (mimeType === "application/pdf" && projectId) {
+      try {
+        const chunkCount = await storeDocumentChunks(
+          projectId.toString(),
+          fileId,
+          file!.fileType,
+          file!.year,
+          file!.originalName,
+          extractedText
+        );
+        logger.info(`PDF embedding completed for file ${fileId}, ${chunkCount} chunks stored`);
+      } catch (embedErr) {
+        logger.error("PDF embedding failed (text extraction still succeeded)", {
+          fileId,
+          error: embedErr instanceof Error ? embedErr.message : embedErr,
+        });
+      }
+    }
+
+    // Invalidate AVA data context cache — the file's updatedAt changed,
+    // so the hash will differ on next query and trigger a rebuild.
+    // This eager invalidation ensures the cache is cleared immediately
+    // rather than relying solely on the hash check.
+    if (projectId) {
+      await invalidateProjectDataContext(projectId.toString()).catch((err) =>
+        logger.warn("Failed to invalidate AVA context cache after extraction", {
+          fileId,
+          error: err instanceof Error ? err.message : err,
+        })
+      );
+    }
 
     // Fan out file_upload_complete notifications to all project members
     if (projectId) {

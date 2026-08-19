@@ -2,12 +2,12 @@ import { Response } from "express";
 import mongoose from "mongoose";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { Chat } from "../models/Chat.model";
-import { DataFile } from "../models/DataFile.model";
 import { StartupQuestion } from "../models/StartupQuestion.model";
 import { PinnedItem } from "../models/PinnedItem.model";
 import { AppError } from "../middleware/errorHandler";
 import logger from "../config/logger";
-import { callAva, buildDataContext } from "../services/ava.service";
+import { callAva } from "../services/ava.service";
+import { getProjectDataContext } from "../services/data-context.service";
 import { getProjectUsageToday, incrementUsage } from "../services/usage.service";
 
 // GET /api/projects/:projectId/ava/chats
@@ -83,19 +83,9 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   // Store original message count for auto-title logic
   const originalMessageCount = chat.messages.length;
 
-  // Build data context from uploaded files (including extracted text content)
-  const files = await DataFile.find({
-    project: projectId,
-    status: { $in: ["Completed", "completed"] },
-  }).select("originalName fileType year extractedText");
-  const dataContext = buildDataContext(
-    files.map((f) => ({
-      name: f.originalName,
-      fileType: f.fileType,
-      year: f.year,
-      extractedText: f.extractedText || "",
-    }))
-  );
+  // Build data context from uploaded files (cached on Project document,
+  // rebuilt only when the set of completed files changes)
+  const dataContext = await getProjectDataContext(projectId);
 
   // Build message history for Gemini
   const history = chat.messages.map((m) => ({
@@ -114,7 +104,7 @@ export async function sendMessage(req: AuthRequest, res: Response) {
   let avaCallSuccessful = false;
 
   try {
-    const result = await callAva(history, dataContext, provider as "gemini" | "groq" | "ollama");
+    const result = await callAva(history, dataContext, provider as "gemini" | "groq" | "ollama", projectId);
     avaContent = result.content;
     avaType = result.type;
     avaTableData = result.tableData as unknown as Record<string, unknown>[] | undefined;

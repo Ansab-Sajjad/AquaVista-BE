@@ -5,6 +5,12 @@ export interface IProjectMember {
   addedAt: Date;
 }
 
+export interface IAvaContextCache {
+  context: string;
+  fileHash: string;
+  builtAt: Date;
+}
+
 export interface IProject extends Document {
   _id: mongoose.Types.ObjectId;
   name: string;
@@ -14,6 +20,7 @@ export interface IProject extends Document {
   createdBy: mongoose.Types.ObjectId;
   members: IProjectMember[];
   dailyQuestionLimit: number;
+  avaContextCache?: IAvaContextCache | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -37,6 +44,11 @@ const ProjectSchema = new Schema<IProject>(
     dailyQuestionLimit: {
       type: Number,
       default: parseInt(process.env.DEFAULT_DAILY_QUESTION_LIMIT || "100", 10),
+    },
+    avaContextCache: {
+      context: { type: String },
+      fileHash: { type: String },
+      builtAt: { type: Date },
     },
   },
   { timestamps: true }
